@@ -697,7 +697,7 @@ static FileType get_file_type(char *filename) {
   error("<command line>: unknown file extension: %s", filename);
 }
 
-int main(int argc, char **argv) {
+int chibi_main(int argc, char **argv) {
   atexit(cleanup);
   init_macros();
   parse_args(argc, argv);
