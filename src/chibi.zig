@@ -150,14 +150,14 @@ pub extern fn consume(rest: [*c][*c]Token, tok: [*c]Token, str: [*c]u8) bool;
 pub extern fn convert_pp_tokens(tok: [*c]Token) void;
 pub extern fn get_input_files() [*c][*c]File;
 pub extern fn new_file(name: [*:0]u8, file_no: c_int, contents: [*:0]u8) *File;
-pub extern fn tokenize_string_literal(tok: [*c]Token, basety: [*c]Type) [*c]Token;
-pub extern fn tokenize(file: *File) ?[*]Token;
-pub extern fn tokenize_file(filename: [*c]u8) [*c]Token;
+pub extern fn tokenize_string_literal(tok: [*c]Token, basety: [*c]Type) ?*Token;
+pub extern fn tokenize(file: *File) ?*Token;
+pub extern fn tokenize_file(filename: [*c]u8) ?*Token;
 pub extern fn search_include_paths(filename: [*c]u8) [*c]u8;
 pub extern fn init_macros() void;
 pub extern fn define_macro(name: [*c]u8, buf: [*c]u8) void;
 pub extern fn undef_macro(name: [*c]u8) void;
-pub extern fn preprocess(tok: [*c]Token) [*c]Token;
+pub extern fn preprocess(tok: *Token) ?*Token;
 
 pub extern fn new_cast(expr: [*c]Node, ty: [*c]Type) [*c]Node;
 pub extern fn const_expr(rest: [*c][*c]Token, tok: [*c]Token) i64;
@@ -229,13 +229,13 @@ pub const TokenKind = enum(c_uint) {
 
 pub const Token = extern struct {
     kind: TokenKind,
-    next: [*c]Token,
+    next: ?*Token,
     val: i64,
     fval: c_longdouble,
-    loc: [*c]u8,
+    loc: [*:0]u8,
     len: c_int,
     ty: *Type,
-    str: [*c]u8,
+    str: [*:0]u8,
     file: *File,
     filename: [*:0]u8,
     line_no: c_int,
@@ -243,7 +243,7 @@ pub const Token = extern struct {
     at_bol: bool,
     has_space: bool,
     hideset: ?*Hideset,
-    origin: [*c]Token,
+    origin: *Token,
 };
 
 // type system =================================================================

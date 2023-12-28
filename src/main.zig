@@ -25,13 +25,28 @@ const Source = struct {
     }
 };
 
-const CompileError = error {
+fn dumpTokens(tokens: ?*chibi.Token) void {
+    var trav = tokens;
+    while (trav) |token| : (trav = token.next) {
+        const slice = token.loc[0..@intCast(token.len)];
+        std.debug.print(
+            "{[filename]s}:{[lineno]d} `{[str]s}`\n",
+            .{
+                .filename = token.filename,
+                .lineno = token.line_no,
+                .str = slice,
+            }
+        );
+    }
+}
+
+const InterpretError = error {
 };
 
 fn interpret(
     ally: Allocator,
     sources: []const Source,
-) (Allocator.Error || CompileError)!void {
+) (Allocator.Error || InterpretError)!void {
     // load sources as chibi files
     var files = std.ArrayList(*chibi.File).init(ally);
     defer {
@@ -47,6 +62,9 @@ fn interpret(
         );
 
         try files.append(file);
+
+        const tokens = chibi.tokenize(file);
+        dumpTokens(tokens);
     }
 }
 
