@@ -1,20 +1,123 @@
 // TODO sort this section
 
-pub const Member = extern struct {
-    next: [*c]Member,
-    ty: [*c]Type,
-    tok: [*c]Token,
-    name: [*c]Token,
-    idx: c_int,
-    @"align": c_int,
-    offset: c_int,
-    is_bitfield: bool,
-    bit_offset: c_int,
-    bit_width: c_int,
+pub extern var include_paths: StringArray;
+pub extern var opt_fpic: bool;
+pub extern var opt_fcommon: bool;
+pub extern var base_file: [*:0]u8;
+
+// utils =======================================================================
+
+pub extern fn format(fmt: [*:0]u8, ...) [*:0]u8;
+pub extern fn align_to(n: c_int, @"align": c_int) c_int;
+pub extern fn encode_utf8(buf: [*]u8, c: u32) c_int;
+pub extern fn decode_utf8(new_pos: *[*:0]u8, p: [*:0]u8) u32;
+pub extern fn is_ident1(c: u32) bool;
+pub extern fn is_ident2(c: u32) bool;
+pub extern fn display_width(p: [*]u8, len: c_int) c_int;
+pub extern fn file_exists(path: [*:0]u8) bool;
+
+// string array ================================================================
+
+pub const StringArray = extern struct {
+    data: ?[*][*:0]u8,
+    capacity: c_int,
+    len: c_int,
 };
 
+pub extern fn strarray_push(arr: *StringArray, s: [*:0]u8) void;
+
+// hashmap =====================================================================
+
+pub const HashEntry = extern struct {
+    key: [*:0]u8,
+    keylen: c_int,
+    val: ?*anyopaque,
+};
+
+pub const HashMap = extern struct {
+    buckets: ?[*]HashEntry,
+    capacity: c_int,
+    used: c_int,
+};
+
+pub extern fn hashmap_get(map: *HashMap, key: [*:0]u8) ?*anyopaque;
+pub extern fn hashmap_get2(map: *HashMap, key: [*:0]u8, keylen: c_int) ?*anyopaque;
+pub extern fn hashmap_put(map: *HashMap, key: [*:0]u8, val: ?*anyopaque) void;
+pub extern fn hashmap_put2(map: *HashMap, key: [*:0]u8, keylen: c_int, val: ?*anyopaque) void;
+pub extern fn hashmap_delete(map: *HashMap, key: [*:0]u8) void;
+pub extern fn hashmap_delete2(map: *HashMap, key: [*:0]u8, keylen: c_int) void;
+pub extern fn hashmap_test() void;
+
+// errors ======================================================================
+
+pub extern fn @"error"(fmt: [*:0]u8, ...) void;
+pub extern fn error_at(loc: [*:0]u8, fmt: [*:0]u8, ...) void;
+pub extern fn error_tok(tok: *Token, fmt: [*:0]u8, ...) void;
+pub extern fn warn_tok(tok: *Token, fmt: [*:0]u8, ...) void;
+
+// tokenization ================================================================
+
+pub const Hideset = opaque {};
+
+pub const TokenKind = enum(c_uint) {
+    ident = 0,
+    punct = 1,
+    keyword = 2,
+    str = 3,
+    num = 4,
+    pp_num = 5,
+    eof = 6,
+};
+
+pub const Token = extern struct {
+    kind: TokenKind,
+    next: ?*Token,
+    val: i64,
+    fval: c_longdouble,
+    loc: [*:0]u8,
+    len: c_int,
+    ty: *Type,
+    str: [*:0]u8,
+    file: *File,
+    filename: [*:0]u8,
+    line_no: c_int,
+    line_delta: c_int,
+    at_bol: bool,
+    has_space: bool,
+    hideset: ?*Hideset,
+    origin: *Token,
+};
+
+pub const File = extern struct {
+    name: [*:0]const u8,
+    file_no: c_int,
+    contents: [*:0]const u8,
+    display_name: [*:0]u8,
+    line_delta: c_int,
+};
+
+pub extern fn equal(tok: [*c]Token, op: [*c]u8) bool;
+pub extern fn skip(tok: [*c]Token, op: [*c]u8) [*c]Token;
+pub extern fn consume(rest: [*c][*c]Token, tok: [*c]Token, str: [*c]u8) bool;
+pub extern fn convert_pp_tokens(tok: [*c]Token) void;
+pub extern fn get_input_files() [*c][*c]File;
+pub extern fn new_file(name: [*:0]const u8, file_no: c_int, contents: [*:0]const u8) *File;
+pub extern fn tokenize_string_literal(tok: [*c]Token, basety: [*c]Type) ?*Token;
+pub extern fn tokenize(file: *File) ?*Token;
+pub extern fn tokenize_file(filename: [*c]u8) ?*Token;
+pub extern fn search_include_paths(filename: [*c]u8) [*c]u8;
+
+// preprocessor ================================================================
+
+pub extern fn init_macros() void;
+pub extern fn define_macro(name: [*c]u8, buf: [*c]u8) void;
+pub extern fn undef_macro(name: [*c]u8) void;
+pub extern fn preprocess(tok: *Token) *Token;
+
+// parsing =====================================================================
+
 pub const Relocation = extern struct {
-    next: [*c]Relocation,
+    next: ?*Relocation,
     offset: c_int,
     label: [*c][*c]u8,
     addend: c_long,
@@ -22,9 +125,9 @@ pub const Relocation = extern struct {
 
 pub const Obj = extern struct {
     next: ?*Obj,
-    name: [*c]u8,
-    ty: [*c]Type,
-    tok: [*c]Token,
+    name: [*:0]u8,
+    ty: *Type,
+    tok: ?*Token,
     is_local: bool,
     @"align": c_int,
     offset: c_int,
@@ -34,12 +137,12 @@ pub const Obj = extern struct {
     is_tentative: bool,
     is_tls: bool,
     init_data: [*c]u8,
-    rel: [*c]Relocation,
+    rel: ?*Relocation,
     is_inline: bool,
-    params: [*c]Obj,
-    body: [*c]Node,
-    locals: [*c]Obj,
-    va_area: [*c]Obj,
+    params: ?*Obj,
+    body: ?*Node,
+    locals: ?*Obj,
+    va_area: ?*Obj,
     alloca_bottom: [*c]Obj,
     stack_size: c_int,
     is_live: bool,
@@ -101,7 +204,7 @@ pub const NodeKind = enum(c_uint) {
 pub const Node = extern struct {
     kind: NodeKind,
     next: ?*Node,
-    ty: [*c]Type,
+    ty: *Type,
     tok: [*c]Token,
     lhs: [*c]Node,
     rhs: [*c]Node,
@@ -136,117 +239,25 @@ pub const Node = extern struct {
     fval: c_longdouble,
 };
 
-pub const File = extern struct {
-    name: [*c]u8,
-    file_no: c_int,
-    contents: [*c]u8,
-    display_name: [*c]u8,
-    line_delta: c_int,
-};
-
-pub extern fn equal(tok: [*c]Token, op: [*c]u8) bool;
-pub extern fn skip(tok: [*c]Token, op: [*c]u8) [*c]Token;
-pub extern fn consume(rest: [*c][*c]Token, tok: [*c]Token, str: [*c]u8) bool;
-pub extern fn convert_pp_tokens(tok: [*c]Token) void;
-pub extern fn get_input_files() [*c][*c]File;
-pub extern fn new_file(name: [*:0]u8, file_no: c_int, contents: [*:0]u8) *File;
-pub extern fn tokenize_string_literal(tok: [*c]Token, basety: [*c]Type) ?*Token;
-pub extern fn tokenize(file: *File) ?*Token;
-pub extern fn tokenize_file(filename: [*c]u8) ?*Token;
-pub extern fn search_include_paths(filename: [*c]u8) [*c]u8;
-pub extern fn init_macros() void;
-pub extern fn define_macro(name: [*c]u8, buf: [*c]u8) void;
-pub extern fn undef_macro(name: [*c]u8) void;
-pub extern fn preprocess(tok: *Token) ?*Token;
-
-pub extern fn new_cast(expr: [*c]Node, ty: [*c]Type) [*c]Node;
-pub extern fn const_expr(rest: [*c][*c]Token, tok: [*c]Token) i64;
-pub extern fn parse(tok: [*c]Token) [*c]Obj;
-
-// utils =======================================================================
-
-pub extern fn format(fmt: [*:0]u8, ...) [*:0]u8;
-pub extern fn align_to(n: c_int, @"align": c_int) c_int;
-pub extern fn encode_utf8(buf: [*]u8, c: u32) c_int;
-pub extern fn decode_utf8(new_pos: *[*:0]u8, p: [*:0]u8) u32;
-pub extern fn is_ident1(c: u32) bool;
-pub extern fn is_ident2(c: u32) bool;
-pub extern fn display_width(p: [*]u8, len: c_int) c_int;
-pub extern fn file_exists(path: [*:0]u8) bool;
-
-// errors ======================================================================
-
-pub extern fn @"error"(fmt: [*:0]u8, ...) void;
-pub extern fn error_at(loc: [*:0]u8, fmt: [*:0]u8, ...) void;
-pub extern fn error_tok(tok: *Token, fmt: [*:0]u8, ...) void;
-pub extern fn warn_tok(tok: *Token, fmt: [*:0]u8, ...) void;
-
-// string array ================================================================
-
-pub const StringArray = extern struct {
-    data: ?[*][*:0]u8,
-    capacity: c_int,
-    len: c_int,
-};
-
-pub extern fn strarray_push(arr: *StringArray, s: [*:0]u8) void;
-
-// hashmap =====================================================================
-
-pub const HashEntry = extern struct {
-    key: [*:0]u8,
-    keylen: c_int,
-    val: ?*anyopaque,
-};
-
-pub const HashMap = extern struct {
-    buckets: ?[*]HashEntry,
-    capacity: c_int,
-    used: c_int,
-};
-
-pub extern fn hashmap_get(map: *HashMap, key: [*:0]u8) ?*anyopaque;
-pub extern fn hashmap_get2(map: *HashMap, key: [*:0]u8, keylen: c_int) ?*anyopaque;
-pub extern fn hashmap_put(map: *HashMap, key: [*:0]u8, val: ?*anyopaque) void;
-pub extern fn hashmap_put2(map: *HashMap, key: [*:0]u8, keylen: c_int, val: ?*anyopaque) void;
-pub extern fn hashmap_delete(map: *HashMap, key: [*:0]u8) void;
-pub extern fn hashmap_delete2(map: *HashMap, key: [*:0]u8, keylen: c_int) void;
-pub extern fn hashmap_test() void;
-
-// tokenization ================================================================
-
-pub const Hideset = opaque {};
-
-pub const TokenKind = enum(c_uint) {
-    ident = 0,
-    punct = 1,
-    keyword = 2,
-    str = 3,
-    num = 4,
-    pp_num = 5,
-    eof = 6,
-};
-
-pub const Token = extern struct {
-    kind: TokenKind,
-    next: ?*Token,
-    val: i64,
-    fval: c_longdouble,
-    loc: [*:0]u8,
-    len: c_int,
-    ty: *Type,
-    str: [*:0]u8,
-    file: *File,
-    filename: [*:0]u8,
-    line_no: c_int,
-    line_delta: c_int,
-    at_bol: bool,
-    has_space: bool,
-    hideset: ?*Hideset,
-    origin: *Token,
-};
+pub extern fn add_type(node: *Node) void;
+pub extern fn new_cast(expr: *Node, ty: *Type) *Node;
+pub extern fn const_expr(rest: **Token, tok: *Token) i64;
+pub extern fn parse(tok: *Token) ?*Obj;
 
 // type system =================================================================
+
+pub const Member = extern struct {
+    next: ?*Member,
+    ty: *Type,
+    tok: *Token,
+    name: *Token,
+    idx: c_int,
+    @"align": c_int,
+    offset: c_int,
+    is_bitfield: bool,
+    bit_offset: c_int,
+    bit_width: c_int,
+};
 
 pub const TypeKind = enum(c_uint) {
     void = 0,
@@ -273,20 +284,20 @@ pub const Type = extern struct {
     @"align": c_int,
     is_unsigned: bool,
     is_atomic: bool,
-    origin: [*c]Type,
-    base: [*c]Type,
-    name: [*c]Token,
-    name_pos: [*c]Token,
+    origin: *Type,
+    base: ?*Type,
+    name: ?*Token,
+    name_pos: ?*Token,
     array_len: c_int,
-    vla_len: [*c]Node,
-    vla_size: [*c]Obj,
-    members: [*c]Member,
+    vla_len: ?*Node,
+    vla_size: ?*Obj,
+    members: ?*Member,
     is_flexible: bool,
     is_packed: bool,
-    return_ty: [*c]Type,
-    params: [*c]Type,
+    return_ty: ?*Type,
+    params: ?*Type,
     is_variadic: bool,
-    next: [*c]Type,
+    next: ?*Type,
 };
 
 pub extern var ty_void: *Type;
@@ -315,13 +326,6 @@ pub extern fn vla_of(base: *Type, expr: *Node) *Type;
 pub extern fn enum_type() *Type;
 pub extern fn struct_type() *Type;
 
-// TODO sort this section
+// codegen =====================================================================
 
-pub extern fn add_type(node: [*c]Node) void;
-
-// pub extern fn codegen(prog: [*c]Obj, out: [*c]FILE) void;
-pub const codegen = @compileError("TODO");
-pub extern var include_paths: StringArray;
-pub extern var opt_fpic: bool;
-pub extern var opt_fcommon: bool;
-pub extern var base_file: [*:0]u8;
+// pub extern fn codegen(prog: *Obj, out: *FILE) void;
