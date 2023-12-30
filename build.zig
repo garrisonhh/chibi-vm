@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) void {
 
     // exe
     const exe = b.addExecutable(.{
-        .name = "chibi-fluent-vm",
+        .name = "chibi-vm",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
