@@ -88,6 +88,8 @@ pub const Type = struct {
     };
 
     name: ?[]const u8,
+    size: usize,
+    alignment: u29,
     data: Data,
 
     fn fromChibi(ally: Allocator, ty: *chibi.Type) Allocator.Error!Self {
@@ -146,6 +148,8 @@ pub const Type = struct {
 
         return Self{
             .name = name,
+            .size = @intCast(ty.size),
+            .alignment = @intCast(ty.@"align"),
             .data = data,
         };
     }
@@ -206,7 +210,7 @@ pub const Node = struct {
         sub: [2]*Node,
         mul: [2]*Node,
         div: [2]*Node,
-        neg,
+        neg: *Node,
         mod: [2]*Node,
         bitand: [2]*Node,
         bitor: [2]*Node,
@@ -217,9 +221,9 @@ pub const Node = struct {
         ne,
         lt,
         le,
-        assign,
+        assign: [2]*Node,
         cond,
-        comma,
+        comma: [2]*Node,
         member,
         addr,
         deref,
@@ -239,8 +243,8 @@ pub const Node = struct {
         label,
         label_val,
         funcall,
-        expr_stmt,
-        stmt_expr,
+        expr_stmt: *Node,
+        stmt_expr: *Node,
         @"var": *Object,
         vla_ptr,
         num,
@@ -268,6 +272,8 @@ pub const Node = struct {
             .bitand,
             .bitor,
             .bitxor,
+            .assign,
+            .comma,
             => |tag| @unionInit(
                 Data,
                 @tagName(tag),
@@ -277,8 +283,11 @@ pub const Node = struct {
                 },
             ),
 
-            inline .@"return",
+            inline .neg,
+            .@"return",
             .cast,
+            .expr_stmt,
+            .stmt_expr,
             => |tag| @unionInit(
                 Data,
                 @tagName(tag),
@@ -349,8 +358,8 @@ pub const Node = struct {
 pub const Object = struct {
     const Self = @This();
 
-    pub const VarDecl = struct {};
-    pub const FuncDecl = struct {
+    pub const VarDef = struct {};
+    pub const FuncDef = struct {
         params: []const Self,
         locals: []const Self,
         body: []const Node,
@@ -360,8 +369,8 @@ pub const Object = struct {
     pub const FuncRef = struct {};
 
     pub const Data = union(enum) {
-        var_decl: VarDecl,
-        func_decl: FuncDecl,
+        var_def: VarDef,
+        func_def: FuncDef,
         var_ref: VarRef,
         func_ref: FuncRef,
     };
@@ -374,6 +383,11 @@ pub const Object = struct {
         const name = cStrSlice(obj.name);
         const ty = try Type.fromChibi(ally, obj.ty);
 
+        if (obj.init_data) |init_data| {
+            const slice = init_data[0..ty.size];
+            std.debug.print("init data for {s}: {any}\n", .{name, slice});
+        }
+
         const data: Data = data: {
             if (obj.is_definition) {
                 if (obj.is_function) {
@@ -381,13 +395,13 @@ pub const Object = struct {
                     const locals = try fromChibiSlice(ally, obj.locals);
                     const body = try Node.fromChibiSlice(ally, obj.body);
 
-                    break :data Data{ .func_decl = .{
+                    break :data Data{ .func_def = .{
                         .params = params,
                         .locals = locals,
                         .body = body,
                     } };
                 } else {
-                    break :data Data{ .var_decl = .{} };
+                    break :data Data{ .var_def = .{} };
                 }
             } else {
                 if (obj.is_function) {
@@ -435,7 +449,7 @@ pub const Object = struct {
         );
 
         switch (self.data) {
-            .func_decl => |fd| {
+            .func_def => |fd| {
                 for (0..level * 2) |_| std.debug.print(" ", .{});
                 std.debug.print("params:\n", .{});
 

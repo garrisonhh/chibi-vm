@@ -136,7 +136,7 @@ pub const Obj = extern struct {
     is_static: bool,
     is_tentative: bool,
     is_tls: bool,
-    init_data: [*c]u8,
+    init_data: ?[*]u8,
     rel: ?*Relocation,
     is_inline: bool,
     params: ?*Obj,

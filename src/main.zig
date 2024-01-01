@@ -38,8 +38,11 @@ pub fn main() !void {
             \\  return a + b;
             \\}
             \\
+            \\int x = 0;
+            \\
             \\int main(int argc, char **argv) {
-            \\  return 0;
+            \\  int ret_val = x;
+            \\  return ret_val;
             \\}
             \\
             ,
