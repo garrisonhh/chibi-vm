@@ -349,25 +349,61 @@ pub const Node = struct {
 pub const Object = struct {
     const Self = @This();
 
+    pub const VarDecl = struct {};
+    pub const FuncDecl = struct {
+        params: []const Self,
+        locals: []const Self,
+        body: []const Node,
+    };
+
+    pub const VarRef = struct {};
+    pub const FuncRef = struct {};
+
+    pub const Data = union(enum) {
+        var_decl: VarDecl,
+        func_decl: FuncDecl,
+        var_ref: VarRef,
+        func_ref: FuncRef,
+    };
+
     name: []const u8,
     ty: Type,
-    params: []const Self,
-    locals: []const Self,
-    nodes: []const Node,
+    data: Data,
 
     fn fromChibi(ally: Allocator, obj: *chibi.Obj) Allocator.Error!Self {
         const name = cStrSlice(obj.name);
         const ty = try Type.fromChibi(ally, obj.ty);
-        const params = try fromChibiSlice(ally, obj.params);
-        const locals = try fromChibiSlice(ally, obj.locals);
-        const nodes = try Node.fromChibiSlice(ally, obj.body);
+
+        const data: Data = data: {
+            if (obj.is_definition) {
+                if (obj.is_function) {
+                    const params = try fromChibiSlice(ally, obj.params);
+                    const locals = try fromChibiSlice(ally, obj.locals);
+                    const body = try Node.fromChibiSlice(ally, obj.body);
+
+                    break :data Data{ .func_decl = .{
+                        .params = params,
+                        .locals = locals,
+                        .body = body,
+                    } };
+                } else {
+                    break :data Data{ .var_decl = .{} };
+                }
+            } else {
+                if (obj.is_function) {
+                    break :data Data{ .func_ref = .{} };
+                } else {
+                    break :data Data{ .var_ref = .{} };
+                }
+            }
+
+            unreachable;
+        };
 
         return Self{
             .name = name,
             .ty = ty,
-            .params = params,
-            .locals = locals,
-            .nodes = nodes,
+            .data = data,
         };
     }
 
@@ -393,33 +429,36 @@ pub const Object = struct {
 
     fn dumpIndented(self: Self, level: u32) void {
         for (0..level * 2) |_| std.debug.print(" ", .{});
-        std.debug.print("{s}: {}\n", .{ self.name, self.ty });
+        std.debug.print(
+            "[{s}] {s}: {}\n",
+            .{ @tagName(self.data), self.name, self.ty },
+        );
 
-        if (self.params.len > 0) {
-            for (0..level * 2) |_| std.debug.print(" ", .{});
-            std.debug.print("params:\n", .{});
+        switch (self.data) {
+            .func_decl => |fd| {
+                for (0..level * 2) |_| std.debug.print(" ", .{});
+                std.debug.print("params:\n", .{});
 
-            for (self.params) |param| {
-                param.dumpIndented(level + 1);
-            }
-        }
+                for (fd.params) |param| {
+                    param.dumpIndented(level + 1);
+                }
 
-        if (self.locals.len > 0) {
-            for (0..level * 2) |_| std.debug.print(" ", .{});
-            std.debug.print("locals:\n", .{});
+                for (0..level * 2) |_| std.debug.print(" ", .{});
+                std.debug.print("locals:\n", .{});
 
-            for (self.locals) |local| {
-                local.dumpIndented(level + 1);
-            }
-        }
+                for (fd.locals) |local| {
+                    local.dumpIndented(level + 1);
+                }
 
-        if (self.nodes.len > 0) {
-            for (0..level * 2) |_| std.debug.print(" ", .{});
-            std.debug.print("body:\n", .{});
+                for (0..level * 2) |_| std.debug.print(" ", .{});
+                std.debug.print("body:\n", .{});
 
-            for (self.nodes) |node| {
-                node.dumpIndented(level + 1);
-            }
+                for (fd.body) |node| {
+                    node.dumpIndented(level + 1);
+                }
+            },
+
+            else => {},
         }
     }
 

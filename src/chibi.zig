@@ -110,8 +110,8 @@ pub extern fn search_include_paths(filename: [*c]u8) [*c]u8;
 // preprocessor ================================================================
 
 pub extern fn init_macros() void;
-pub extern fn define_macro(name: [*c]u8, buf: [*c]u8) void;
-pub extern fn undef_macro(name: [*c]u8) void;
+pub extern fn define_macro(name: [*:0]u8, buf: [*:0]u8) void;
+pub extern fn undef_macro(name: [*:0]u8) void;
 pub extern fn preprocess(tok: *Token) *Token;
 
 // parsing =====================================================================
@@ -143,7 +143,7 @@ pub const Obj = extern struct {
     body: ?*Node,
     locals: ?*Obj,
     va_area: ?*Obj,
-    alloca_bottom: [*c]Obj,
+    alloca_bottom: ?*Obj,
     stack_size: c_int,
     is_live: bool,
     is_root: bool,
