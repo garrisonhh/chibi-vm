@@ -8,7 +8,7 @@ const chibi = @import("chibi.zig");
 
 fn cStrSlice(c_str: [*:0]const u8) [:0]const u8 {
     const len = std.mem.indexOfSentinel(u8, 0, c_str);
-    return c_str[0..len:0];
+    return c_str[0..len :0];
 }
 
 /// chibi objects tend to use a next pointer for lists
@@ -134,7 +134,7 @@ pub const Type = struct {
                 break :func Data{ .func = .{
                     .params = params,
                     .returns = returns,
-                }};
+                } };
             },
 
             inline else => |type_kind| @unionInit(
@@ -197,29 +197,234 @@ pub const Type = struct {
     }
 };
 
+pub const Node = struct {
+    const Self = @This();
+
+    pub const Data = union(chibi.NodeKind) {
+        null_expr,
+        add: [2]*Node,
+        sub: [2]*Node,
+        mul: [2]*Node,
+        div: [2]*Node,
+        neg,
+        mod: [2]*Node,
+        bitand: [2]*Node,
+        bitor: [2]*Node,
+        bitxor: [2]*Node,
+        shl,
+        shr,
+        eq,
+        ne,
+        lt,
+        le,
+        assign,
+        cond,
+        comma,
+        member,
+        addr,
+        deref,
+        not,
+        bitnot,
+        logand,
+        logor,
+        @"return": *Node,
+        @"if",
+        @"for",
+        do,
+        @"switch",
+        case,
+        block: []const Node,
+        goto,
+        goto_expr,
+        label,
+        label_val,
+        funcall,
+        expr_stmt,
+        stmt_expr,
+        @"var": *Object,
+        vla_ptr,
+        num,
+        cast: *Node,
+        memzero,
+        @"asm",
+        cas,
+        exch,
+    };
+
+    ty: ?Type,
+    data: Data,
+
+    fn fromChibi(ally: Allocator, node: *chibi.Node) Allocator.Error!Self {
+        const ty: ?Type = if (node.ty) |chibi_ty| ty: {
+            break :ty try Type.fromChibi(ally, chibi_ty);
+        } else null;
+
+        const data: Data = switch (node.kind) {
+            inline .add,
+            .sub,
+            .mul,
+            .div,
+            .mod,
+            .bitand,
+            .bitor,
+            .bitxor,
+            => |tag| @unionInit(
+                Data,
+                @tagName(tag),
+                .{
+                    try fromChibiAlloc(ally, node.lhs.?),
+                    try fromChibiAlloc(ally, node.rhs.?),
+                },
+            ),
+
+            inline .@"return",
+            .cast,
+            => |tag| @unionInit(
+                Data,
+                @tagName(tag),
+                try fromChibiAlloc(ally, node.lhs.?),
+            ),
+
+            .block => Data{
+                .block = try fromChibiSlice(ally, node.body),
+            },
+            .@"var" => Data{
+                .@"var" = try Object.fromChibiAlloc(ally, node.@"var".?),
+            },
+
+            inline else => |tag| @unionInit(Data, @tagName(tag), {}),
+        };
+
+        return Self{
+            .ty = ty,
+            .data = data,
+        };
+    }
+
+    fn fromChibiAlloc(ally: Allocator, ty: *chibi.Node) Allocator.Error!*Self {
+        const box = try ally.create(Self);
+        box.* = try fromChibi(ally, ty);
+        return box;
+    }
+
+    fn fromChibiSlice(
+        ally: Allocator,
+        list: ?*chibi.Node,
+    ) Allocator.Error![]const Self {
+        var nodes = std.ArrayListUnmanaged(Node){};
+        var node_iter = iterateChibi(chibi.Node, list);
+        while (node_iter.next()) |chibi_node| {
+            const node = try Node.fromChibi(ally, chibi_node);
+            try nodes.append(ally, node);
+        }
+
+        return try nodes.toOwnedSlice(ally);
+    }
+
+    fn dumpIndented(self: Self, level: u32) void {
+        for (0..level * 2) |_| std.debug.print(" ", .{});
+        std.debug.print("[{s}] {?}\n", .{ @tagName(self.data), self.ty });
+
+        switch (self.data) {
+            inline else => |meta| switch (@TypeOf(meta)) {
+                void => {},
+                *Node, *Object => {
+                    meta.dumpIndented(level + 1);
+                },
+                []const Node, [2]*Node => {
+                    for (meta) |child| {
+                        child.dumpIndented(level + 1);
+                    }
+                },
+                else => unreachable,
+            },
+        }
+    }
+
+    fn dump(self: Self) void {
+        self.dumpIndented(0);
+    }
+};
+
 pub const Object = struct {
     const Self = @This();
 
     name: []const u8,
     ty: Type,
+    params: []const Self,
+    locals: []const Self,
+    nodes: []const Node,
 
     fn fromChibi(ally: Allocator, obj: *chibi.Obj) Allocator.Error!Self {
         const name = cStrSlice(obj.name);
         const ty = try Type.fromChibi(ally, obj.ty);
+        const params = try fromChibiSlice(ally, obj.params);
+        const locals = try fromChibiSlice(ally, obj.locals);
+        const nodes = try Node.fromChibiSlice(ally, obj.body);
 
         return Self{
             .name = name,
             .ty = ty,
+            .params = params,
+            .locals = locals,
+            .nodes = nodes,
         };
     }
 
-    pub fn format(
-        self: Self,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) @TypeOf(writer).Error!void {
-        try writer.print("object(name=\"{s}\", ty={})", .{self.name, self.ty});
+    fn fromChibiAlloc(ally: Allocator, obj: *chibi.Obj) Allocator.Error!*Self {
+        const box = try ally.create(Self);
+        box.* = try fromChibi(ally, obj);
+        return box;
+    }
+
+    fn fromChibiSlice(
+        ally: Allocator,
+        list: ?*chibi.Obj,
+    ) Allocator.Error![]const Self {
+        var objects = std.ArrayListUnmanaged(Self){};
+        var node_iter = iterateChibi(chibi.Obj, list);
+        while (node_iter.next()) |chibi_node| {
+            const node = try fromChibi(ally, chibi_node);
+            try objects.append(ally, node);
+        }
+
+        return try objects.toOwnedSlice(ally);
+    }
+
+    fn dumpIndented(self: Self, level: u32) void {
+        for (0..level * 2) |_| std.debug.print(" ", .{});
+        std.debug.print("{s}: {}\n", .{ self.name, self.ty });
+
+        if (self.params.len > 0) {
+            for (0..level * 2) |_| std.debug.print(" ", .{});
+            std.debug.print("params:\n", .{});
+
+            for (self.params) |param| {
+                param.dumpIndented(level + 1);
+            }
+        }
+
+        if (self.locals.len > 0) {
+            for (0..level * 2) |_| std.debug.print(" ", .{});
+            std.debug.print("locals:\n", .{});
+
+            for (self.locals) |local| {
+                local.dumpIndented(level + 1);
+            }
+        }
+
+        if (self.nodes.len > 0) {
+            for (0..level * 2) |_| std.debug.print(" ", .{});
+            std.debug.print("body:\n", .{});
+
+            for (self.nodes) |node| {
+                node.dumpIndented(level + 1);
+            }
+        }
+    }
+
+    fn dump(self: Self) void {
+        self.dumpIndented(0);
     }
 };
 
@@ -247,7 +452,7 @@ fn loadSource(source: Source) Allocator.Error!*chibi.File {
     return file;
 }
 
-pub const FrontendError = Allocator.Error || error {
+pub const FrontendError = Allocator.Error || error{
     TokenizeError,
     ParseError,
 };
@@ -279,8 +484,8 @@ pub fn parse(ally: Allocator, source: Source) FrontendError![]const Object {
         const object = try Object.fromChibi(ally, chibi_obj);
         try objects.append(ally, object);
 
-        std.debug.print("[object]\n{}\n\n", .{object});
+        object.dump();
     }
 
-    @panic("TODO");
+    return try objects.toOwnedSlice(ally);
 }
