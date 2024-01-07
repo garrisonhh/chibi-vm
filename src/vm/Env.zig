@@ -44,7 +44,7 @@ const State = struct {
 /// call stack
 const Trace = struct {
     const Entry = struct {
-        /// previous stack top
+        /// previous stack top TODO this might actually be useless lol
         base: usize,
         /// where to return
         ret_loc: usize,

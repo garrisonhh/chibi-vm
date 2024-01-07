@@ -204,6 +204,11 @@ pub const Type = struct {
 pub const Node = struct {
     const Self = @This();
 
+    pub const Number = union(enum) {
+        int: u64,
+        float: f64,
+    };
+
     pub const Data = union(chibi.NodeKind) {
         null_expr,
         add: [2]*Node,
@@ -247,7 +252,7 @@ pub const Node = struct {
         stmt_expr: *Node,
         @"var": *Object,
         vla_ptr,
-        num,
+        num: Number,
         cast: *Node,
         memzero,
         @"asm",
@@ -300,6 +305,13 @@ pub const Node = struct {
             .@"var" => Data{
                 .@"var" = try Object.fromChibiAlloc(ally, node.@"var".?),
             },
+            .num => Data{
+                .num = switch (ty.?.data) {
+                    .char, .short, .int, .long => .{ .int = node.val },
+                    .float, .double, .ldouble => .{ .float = @floatCast(node.fval) },
+                    else => unreachable,
+                },
+            },
 
             inline else => |tag| @unionInit(Data, @tagName(tag), {}),
         };
@@ -337,6 +349,14 @@ pub const Node = struct {
         switch (self.data) {
             inline else => |meta| switch (@TypeOf(meta)) {
                 void => {},
+                Number => {
+                    for (0..(level + 1) * 2) |_| std.debug.print(" ", .{});
+                    switch (meta) {
+                        inline else => |data| {
+                            std.debug.print("{d}\n", .{data});
+                        }
+                    }
+                },
                 *Node, *Object => {
                     meta.dumpIndented(level + 1);
                 },

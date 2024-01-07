@@ -235,7 +235,7 @@ pub const Node = extern struct {
     atomic_addr: [*c]Obj,
     atomic_expr: [*c]Node,
     @"var": ?*Obj,
-    val: i64,
+    val: u64,
     fval: c_longdouble,
 };
 

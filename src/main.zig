@@ -4,24 +4,31 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const frontend = @import("frontend.zig");
 const Source = frontend.Source;
+const codegen = @import("codegen.zig");
+const vm = @import("vm.zig");
 
 // enable all tests
 comptime {
     std.testing.refAllDeclsRecursive(@This());
 }
 
-fn interpret(
+fn compile(
     backing_ally: Allocator,
     sources: []const Source,
-) frontend.FrontendError!void {
+) !vm.SharedObject {
     var arena = std.heap.ArenaAllocator.init(backing_ally);
     defer arena.deinit();
     const ally = arena.allocator();
 
+    var objects = std.ArrayListUnmanaged(vm.Object){};
+
     for (sources) |source| {
-        const parsed = try frontend.parse(ally, source);
-        _ = parsed;
+        const ast = try frontend.parse(ally, source);
+        const object = try codegen.lower(ally, ast);
+        try objects.append(ally, object);
     }
+
+    return try vm.link(backing_ally, objects.items);
 }
 
 pub fn main() !void {
@@ -41,37 +48,20 @@ pub fn main() !void {
         .{
             .name = "test_file",
             .contents =
-            \\int add(int a, int b) {
-            \\  return a + b;
+            \\int number(void) {
+            \\  return 4;
             \\}
             \\
             ,
         },
     };
 
-    try interpret(ally, &sources);
-
-    // TODO testing remove
-    const vm = @import("vm.zig");
-    var builder = vm.Builder.init(ally);
-
-    try builder.@"export"("add");
-    try builder.op(.{ .add = .word });
-    try builder.op(.ret);
-
-    const obj = try builder.build();
-    defer obj.deinit(ally);
-
-    var so = try vm.link(ally, &.{obj});
+    var so = try compile(ally, &sources);
     defer so.deinit(ally);
 
     var env = try vm.Env.init(ally, .{});
     defer env.deinit(ally);
 
-    try env.push(i64, 24);
-    try env.push(i64, 18);
-    try env.exec(&so, "add");
-    const res = try env.pop(i64);
-
-    std.debug.print("res: {}\n", .{res});
+    try env.exec(&so, "number");
+    std.debug.print("output: {}\n", .{try env.pop(i32)});
 }
