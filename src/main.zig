@@ -5,6 +5,11 @@ const Allocator = std.mem.Allocator;
 const frontend = @import("frontend.zig");
 const Source = frontend.Source;
 
+// enable all tests
+comptime {
+    std.testing.refAllDeclsRecursive(@This());
+}
+
 fn interpret(
     backing_ally: Allocator,
     sources: []const Source,

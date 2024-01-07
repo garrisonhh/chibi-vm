@@ -58,6 +58,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    unit_tests.linkLibC();
+    unit_tests.addIncludePath(.{ .path = chibi.c_include_path });
+    unit_tests.addCSourceFiles(&chibi.c_sources, &chibi.c_flags);
+
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
     const test_step = b.step("test", "Run unit tests");
