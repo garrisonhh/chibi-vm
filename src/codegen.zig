@@ -52,10 +52,9 @@ fn lowerNode(b: *Builder, node: *const Node) !void {
             const from = child.ty.?;
 
             if (into.data == .void) {
-                // ignore value
-                try b.op(.drop);
+                // value will be ignored
             } else if (into.data == .bool) {
-                // bool cast
+                // bool cast (just compare to zero)
                 return unimplemented("cast to bool", .{});
             } else if (from.isInt() and into.isFloat()) {
                 // int to float

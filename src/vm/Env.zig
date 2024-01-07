@@ -14,8 +14,6 @@ const Env = @This();
 pub const Error = error{
     VmStackOverflow,
     VmStackUnderflow,
-    VmTraceOverflow,
-    VmTraceUnderflow,
 };
 
 const State = struct {
@@ -41,130 +39,108 @@ const State = struct {
     }
 };
 
-/// call stack
-const Trace = struct {
-    const Entry = struct {
-        /// previous stack top TODO this might actually be useless lol
-        base: usize,
-        /// where to return
-        ret_loc: usize,
-    };
-
-    entries: []Entry,
-    top: usize = 0,
-
-    fn peek(self: Trace) ?Entry {
-        return if (self.top > 0) self.entries[self.top - 1] else null;
-    }
-
-    fn push(self: *Trace, entry: Entry) Error!void {
-        if (self.top >= self.entries.len) {
-            return Error.VmTraceOverflow;
-        }
-
-        self.entries[self.top] = entry;
-        self.top += 1;
-    }
-
-    fn pop(self: *Trace) Error!Entry {
-        return self.peek() orelse Error.VmTraceUnderflow;
-    }
-};
-
-/// operable value
-const Value = packed struct(u64) {
-    bytes: u64,
-
-    fn from(comptime T: type, data: T) Value {
-        if (comptime @sizeOf(T) > 8) {
-            @compileError(@typeName(T) ++ " is more than 8 bytes");
-        }
-
-        var v: Value = undefined;
-        const dst = std.mem.asBytes(&v);
-        const src = std.mem.asBytes(&data);
-        @memcpy(dst[0..src.len], src);
-
-        return v;
-    }
-
-    fn into(v: Value, comptime T: type) T {
-        if (comptime @sizeOf(T) > 8) {
-            @compileError(@typeName(T) ++ " is more than 8 bytes");
-        }
-
-        var t: T = undefined;
-        const dst = std.mem.asBytes(&t);
-        const src = std.mem.asBytes(&v);
-        @memcpy(dst, src[0..dst.len]);
-
-        return t;
-    }
-};
-
 /// operation stack
 const Stack = struct {
-    values: []Value,
-    top: usize = 0,
+    mem: []align(8) u8,
+    base: [*]align(8) u8,
+    top: [*]align(8) u8,
 
-    fn peek(self: Stack) ?Value {
-        return if (self.top > 0) self.values[self.top - 1] else null;
+    const Trace = struct {
+        base: [*]align(8) u8,
+        pc: usize,
+    };
+
+    fn init(mem: []align(8) u8) Stack {
+        return Stack{
+            .mem = mem,
+            .base = mem.ptr,
+            .top = mem.ptr,
+        };
     }
 
-    fn push(self: *Stack, v: Value) Error!void {
-        if (self.top >= self.values.len) {
+    /// total stack used
+    fn used(self: Stack) usize {
+        return @intFromPtr(self.top) - @intFromPtr(self.mem.ptr);
+    }
+
+    /// size of T when accounting for 8-bit alignment
+    fn aligned8Size(comptime T: type) comptime_int {
+        comptime {
+            return std.mem.alignForward(usize, @sizeOf(T), 8);
+        }
+    }
+
+    fn reserve(self: *Stack, nbytes: usize) Error!void {
+        const sz = std.mem.alignForward(usize, nbytes, 8);
+        if (self.used() + sz > self.mem.len) {
             return Error.VmStackOverflow;
         }
 
-        self.values[self.top] = v;
-        self.top += 1;
+        self.top = @ptrFromInt(@intFromPtr(self.top) + sz);
     }
 
-    fn pop(self: *Stack) Error!Value {
-        const value = self.peek() orelse {
+    fn peek(self: Stack, comptime T: type) ?T {
+        const sz = aligned8Size(T);
+        if (self.used() < sz) return null;
+
+        const ptr: *const T = @ptrFromInt(@intFromPtr(self.top) - sz);
+        return ptr.*;
+    }
+
+    fn push(self: *Stack, comptime T: type, value: T) Error!void {
+        const sz = aligned8Size(T);
+        if (self.used() + sz > self.mem.len) {
+            return Error.VmStackOverflow;
+        }
+
+        @as(*T, @ptrCast(self.top)).* = value;
+        self.top = @ptrFromInt(@intFromPtr(self.top) + sz);
+    }
+
+    fn pop(self: *Stack, comptime T: type) Error!T {
+        const value = self.peek(T) orelse {
             return Error.VmStackUnderflow;
         };
 
-        self.top -= 1;
+        const sz = aligned8Size(T);
+        self.top = @ptrFromInt(@intFromPtr(self.top) - sz);
         return value;
     }
 };
 
-trace: Trace,
 stack: Stack,
 
 pub const Config = struct {
-    max_calls: usize = 512,
-    max_values: usize = 512,
+    stack_size: usize = 64 * 1024,
 };
 
 pub fn init(ally: Allocator, cfg: Config) Allocator.Error!Env {
-    const entries = try ally.alloc(Trace.Entry, cfg.max_calls);
-    const values = try ally.alloc(Value, cfg.max_values);
-
-    return Env{
-        .trace = Trace{ .entries = entries },
-        .stack = Stack{ .values = values },
-    };
+    const mem = try ally.alignedAlloc(u8, 8, cfg.stack_size);
+    return Env{ .stack = Stack.init(mem) };
 }
 
 pub fn deinit(env: *Env, ally: Allocator) void {
-    ally.free(env.stack.values);
-    ally.free(env.trace.entries);
+    ally.free(env.stack.mem);
 }
 
 pub fn peek(env: Env, comptime T: type) ?T {
-    const v = env.stack.peek() orelse return null;
-    return v.into(T);
+    return env.stack.peek(T);
 }
 
 pub fn push(env: *Env, comptime T: type, data: T) Error!void {
-    try env.stack.push(Value.from(T, data));
+    try env.stack.push(T, data);
 }
 
 pub fn pop(env: *Env, comptime T: type) Error!T {
-    const v = try env.stack.pop();
-    return v.into(T);
+    return env.stack.pop(T);
+}
+
+fn call(env: *Env, state: *State, dest: usize) Error!void {
+    try env.push(Stack.Trace, .{
+        .base = env.stack.top,
+        .pc = state.pc,
+    });
+    state.pc = dest;
 }
 
 // execution ===================================================================
@@ -184,11 +160,15 @@ pub fn exec(
         return ExecError.NoSuchFunction;
     };
 
+    // start in a halted state so that returning from the first function will
+    // halt execution
     var state = State{
         .code = so.code,
-        .pc = offset,
+        .pc = so.code.len,
     };
+    try env.call(&state, offset);
 
+    // execute ops until halted
     while (state.pc < state.code.len) {
         const byte = state.readByte();
         const sub = byte_subs[byte] orelse {
@@ -210,17 +190,17 @@ const byte_subs = blk: {
     @memset(&arr, null);
 
     const generic_sub_namespaces = [_]type{
-        GenericSubs(.byte),
-        GenericSubs(.short),
-        GenericSubs(.half),
-        GenericSubs(.word),
+        generic_subs(.byte),
+        generic_subs(.short),
+        generic_subs(.half),
+        generic_subs(.word),
     };
 
     for (std.enums.values(Opcode)) |opcode| {
         const op_name = @tagName(opcode);
 
-        if (@hasDecl(MonomorphicSubs, op_name)) {
-            const func = @field(MonomorphicSubs, op_name);
+        if (@hasDecl(monomorphic_subs, op_name)) {
+            const func = @field(monomorphic_subs, op_name);
             const bo = ByteOp{ .opcode = opcode };
 
             arr[@as(u8, @bitCast(bo))] = &func;
@@ -241,38 +221,30 @@ const byte_subs = blk: {
 };
 
 /// subroutines for opcodes which aren't generic over width
-const MonomorphicSubs = struct {
+const monomorphic_subs = struct {
     fn halt(_: *Env, state: *State) Error!void {
         state.pc = state.code.len;
     }
 
     fn enter(env: *Env, state: *State) Error!void {
         const stack_size = state.readValue(u16);
-        try env.trace.push(Trace.Entry{
-            .base = env.stack.top,
-            .ret_loc = state.pc,
-        });
-
-        // TODO write locals to some kind of working memory for the function
-        _ = stack_size;
+        try env.stack.reserve(stack_size);
     }
 
     fn ret(env: *Env, state: *State) Error!void {
-        // stop execution if returning from first function
-        if (env.trace.top == 0) {
-            try halt(env, state);
-            return;
-        }
+        const return_value = try env.pop(u64);
 
-        // actually return
-        const entry = try env.trace.pop();
-        state.pc = entry.ret_loc;
-        env.stack.top = entry.base + 1; // + 1 for the return value
+        const trace: *const Stack.Trace = @ptrCast(env.stack.base);
+        env.stack.top = env.stack.base;
+        env.stack.base = trace.base;
+        state.pc = trace.pc;
+
+        try env.push(u64, return_value);
     }
 };
 
 /// subroutines for opcodes which are generic over width
-fn GenericSubs(comptime W: Width) type {
+fn generic_subs(comptime W: Width) type {
     return struct {
         const width = W;
         const nbytes = W.bytes();
