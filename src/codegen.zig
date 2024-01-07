@@ -47,7 +47,30 @@ fn lowerNode(b: *Builder, node: *const Node) !void {
         },
         .cast => |child| {
             try lowerNode(b, child);
-            // TODO cast!!!
+
+            const into = node.ty.?;
+            const from = child.ty.?;
+
+            if (into.data == .void) {
+                // ignore value
+                try b.op(.drop);
+            } else if (into.data == .bool) {
+                // bool cast
+                return unimplemented("cast to bool", .{});
+            } else if (from.isInt() and into.isFloat()) {
+                // int to float
+                return unimplemented("int to float", .{});
+            } else if (from.isFloat() and into.isInt()) {
+                // float to int
+                return unimplemented("float to int", .{});
+            } else if (from.size != into.size and
+                into.isInt() and from.isInt())
+            {
+                // intcast
+                return unimplemented("intcast", .{});
+            }
+
+            // all other casts are noops
         },
         .num => |num| {
             const constant: vm.Op.Constant = switch (node.ty.?.data) {
@@ -71,7 +94,7 @@ fn lowerNode(b: *Builder, node: *const Node) !void {
                     const width = comptime vm.Width.fromBytes(@sizeOf(T));
                     const arr: [width.bytes()]u8 = @bitCast(value);
                     break :c @unionInit(vm.Op.Constant, @tagName(width), arr);
-                }
+                },
             };
 
             try b.op(.{ .constant = constant });
@@ -79,7 +102,7 @@ fn lowerNode(b: *Builder, node: *const Node) !void {
 
         else => {
             try unimplemented("{}", .{@as(std.meta.Tag(Node.Data), node.data)});
-        }
+        },
     }
 }
 

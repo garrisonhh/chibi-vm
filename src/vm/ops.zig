@@ -9,6 +9,8 @@ pub const Opcode = enum(u6) {
 
     // read value bytes from code and push to stack
     constant,
+    // remove a stack value
+    drop,
 
     // binary twos-complement 64-bit math
     // some need differentiating between signed and unsigned, some don't
@@ -22,6 +24,10 @@ pub const Opcode = enum(u6) {
 
     // unary math
     neg,
+
+    // number type manipulation
+    sign_extend, // i8/i16/i32 -> i64
+    sign_narrow, // i64 -> i8/i16/i32
 
     // load,
     // store,
@@ -70,6 +76,7 @@ pub const Op = union(Opcode) {
     enter: usize,
     ret,
     constant: Constant,
+    drop,
     add: Width,
     sub: Width,
     mulu: Width,
@@ -78,6 +85,8 @@ pub const Op = union(Opcode) {
     divi: Width,
     mod: Width,
     neg: Width,
+    sign_extend: Width,
+    sign_narrow: Width,
 
     /// get the opcode meta description for code verification
     /// *works in comptime*
@@ -93,7 +102,11 @@ pub const Op = union(Opcode) {
             .ret,
             => .{ 0, 0 },
             .constant => .{ 0, 1 },
-            .neg => .{1, 1}
+            .drop => .{ 1, 0 },
+            .neg,
+            .sign_extend,
+            .sign_narrow,
+            => .{ 1, 1 },
             .add,
             .sub,
             .mulu,

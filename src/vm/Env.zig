@@ -31,7 +31,7 @@ const State = struct {
 
     fn readNBytes(state: *State, comptime N: comptime_int) [N]u8 {
         defer state.pc += N;
-        const slice = state.code[state.pc..state.pc + N];
+        const slice = state.code[state.pc .. state.pc + N];
         const ptr: *const [N]u8 = @ptrCast(slice.ptr);
         return ptr.*;
     }
@@ -72,7 +72,7 @@ const Trace = struct {
 };
 
 /// operable value
-const Value = packed struct (u64) {
+const Value = packed struct(u64) {
     bytes: u64,
 
     fn from(comptime T: type, data: T) Value {
@@ -169,7 +169,7 @@ pub fn pop(env: *Env, comptime T: type) Error!T {
 
 // execution ===================================================================
 
-pub const ExecError = Allocator.Error || Error || error {
+pub const ExecError = Allocator.Error || Error || error{
     NoSuchFunction,
     InvalidByteOp,
 };

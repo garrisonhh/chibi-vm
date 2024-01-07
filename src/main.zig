@@ -49,7 +49,7 @@ pub fn main() !void {
             .name = "test_file",
             .contents =
             \\int number(void) {
-            \\  return 4;
+            \\  return 4 + 5;
             \\}
             \\
             ,

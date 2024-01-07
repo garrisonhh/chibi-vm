@@ -161,6 +161,20 @@ pub const Type = struct {
         return box;
     }
 
+    pub fn isInt(self: Self) bool {
+        return switch (self.data) {
+            .char, .short, .int, .long => true,
+            else => false,
+        };
+    }
+
+    pub fn isFloat(self: Self) bool {
+        return switch (self.data) {
+            .float, .double, .ldouble => true,
+            else => false,
+        };
+    }
+
     /// formatting these with zig-style syntax for a lot of thigns for my own
     /// readability
     pub fn format(
@@ -354,7 +368,7 @@ pub const Node = struct {
                     switch (meta) {
                         inline else => |data| {
                             std.debug.print("{d}\n", .{data});
-                        }
+                        },
                     }
                 },
                 *Node, *Object => {

@@ -100,12 +100,22 @@ pub const Builder = struct {
         // create byte op from op and append
         var bo = ByteOp{ .opcode = o };
         switch (o) {
-            .halt, .enter, .ret => {},
+            .halt, .enter, .ret, .drop => {},
             .constant => |c| {
                 bo.width = c;
             },
 
-            .add, .sub, .mulu, .muli, .divu, .divi, .mod, .neg => |w| {
+            .add,
+            .sub,
+            .mulu,
+            .muli,
+            .divu,
+            .divi,
+            .mod,
+            .neg,
+            .sign_extend,
+            .sign_narrow,
+            => |w| {
                 bo.width = w;
             },
         }
@@ -128,7 +138,10 @@ pub const Builder = struct {
 };
 
 /// links objects into executable form
-pub fn link(ally: Allocator, objects: []const Object,) Allocator.Error!SharedObject {
+pub fn link(
+    ally: Allocator,
+    objects: []const Object,
+) Allocator.Error!SharedObject {
     std.debug.assert(objects.len == 1);
     std.debug.assert(objects[0].imports.len == 0);
 
