@@ -1,4 +1,4 @@
-// TODO sort this section
+//! the 'chibi.h' header translated and edited for zig usage
 
 pub extern var include_paths: StringArray;
 pub extern var opt_fpic: bool;

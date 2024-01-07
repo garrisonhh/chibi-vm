@@ -358,8 +358,11 @@ pub const Node = struct {
 pub const Object = struct {
     const Self = @This();
 
-    pub const VarDef = struct {};
+    pub const VarDef = struct {
+        data: ?[*]const u8,
+    };
     pub const FuncDef = struct {
+        stack_size: usize,
         params: []const Self,
         locals: []const Self,
         body: []const Node,
@@ -385,7 +388,7 @@ pub const Object = struct {
 
         if (obj.init_data) |init_data| {
             const slice = init_data[0..ty.size];
-            std.debug.print("init data for {s}: {any}\n", .{name, slice});
+            std.debug.print("init data for {s}: {any}\n", .{ name, slice });
         }
 
         const data: Data = data: {
@@ -396,12 +399,15 @@ pub const Object = struct {
                     const body = try Node.fromChibiSlice(ally, obj.body);
 
                     break :data Data{ .func_def = .{
+                        .stack_size = @intCast(obj.stack_size),
                         .params = params,
                         .locals = locals,
                         .body = body,
                     } };
                 } else {
-                    break :data Data{ .var_def = .{} };
+                    break :data Data{ .var_def = .{
+                        .data = if (obj.init_data) |data| data else null,
+                    } };
                 }
             } else {
                 if (obj.is_function) {
@@ -449,6 +455,11 @@ pub const Object = struct {
         );
 
         switch (self.data) {
+            .var_def => |vd| {
+                for (0..level * 2) |_| std.debug.print(" ", .{});
+                std.debug.print("data: {?*}\n", .{vd.data});
+            },
+
             .func_def => |fd| {
                 for (0..level * 2) |_| std.debug.print(" ", .{});
                 std.debug.print("params:\n", .{});
@@ -458,7 +469,7 @@ pub const Object = struct {
                 }
 
                 for (0..level * 2) |_| std.debug.print(" ", .{});
-                std.debug.print("locals:\n", .{});
+                std.debug.print("locals ({} stack bytes):\n", .{fd.stack_size});
 
                 for (fd.locals) |local| {
                     local.dumpIndented(level + 1);
