@@ -48,8 +48,8 @@ pub fn main() !void {
         .{
             .name = "test_file",
             .contents =
-            \\int number(void) {
-            \\  return 4 + 5;
+            \\int add(int a, int b) {
+            \\  return a + b;
             \\}
             \\
             ,
@@ -62,6 +62,8 @@ pub fn main() !void {
     var env = try vm.Env.init(ally, .{});
     defer env.deinit(ally);
 
-    try env.exec(&so, "number");
+    try env.push(i32, 24);
+    try env.push(i32, 18);
+    try env.exec(&so, "add");
     std.debug.print("output: {}\n", .{try env.pop(i32)});
 }

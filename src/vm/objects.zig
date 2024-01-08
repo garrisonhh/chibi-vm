@@ -104,6 +104,9 @@ pub const Builder = struct {
             .constant => |c| {
                 bo.width = c;
             },
+            .get_local, .set_local => |local| {
+                bo.width = local.width;
+            },
 
             .add,
             .sub,
@@ -124,12 +127,16 @@ pub const Builder = struct {
         // add any other data
         switch (o) {
             .enter => |stack_size| {
-                try self.code.appendSlice(ally, std.mem.asBytes(&stack_size));
+                const sz: u16 = @intCast(stack_size);
+                try self.code.appendSlice(ally, std.mem.asBytes(&sz));
             },
             .constant => |data| switch (data) {
                 inline else => |bytes| {
                     try self.code.appendSlice(ally, &bytes);
                 },
+            },
+            .get_local, .set_local => |local| {
+                try self.code.appendSlice(ally, std.mem.asBytes(&local.offset));
             },
 
             else => {},

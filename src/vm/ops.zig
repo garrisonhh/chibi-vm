@@ -9,6 +9,10 @@ pub const Opcode = enum(u6) {
 
     // read value bytes from code and push to stack
     constant,
+    // read <width> bytes at i16 offset (negatives are needed for parameters)
+    get_local,
+    // write <width> bytes at i16 offset
+    set_local,
     // remove a stack value
     drop,
 
@@ -72,10 +76,17 @@ pub const Op = union(Opcode) {
         word: [8]u8,
     };
 
+    pub const Local = struct {
+        width: Width,
+        offset: i16,
+    };
+
     halt,
     enter: usize,
     ret,
     constant: Constant,
+    get_local: Local,
+    set_local: Local,
     drop,
     add: Width,
     sub: Width,
@@ -101,8 +112,12 @@ pub const Op = union(Opcode) {
             .enter,
             .ret,
             => .{ 0, 0 },
-            .constant => .{ 0, 1 },
-            .drop => .{ 1, 0 },
+            .constant,
+            .get_local,
+            => .{ 0, 1 },
+            .drop,
+            .set_local,
+            => .{ 1, 0 },
             .neg,
             .sign_extend,
             .sign_narrow,
@@ -128,4 +143,16 @@ pub const Op = union(Opcode) {
 pub const ByteOp = packed struct(u8) {
     width: Width = .byte,
     opcode: Opcode,
+
+    pub fn format(
+        self: @This(),
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        try writer.print("{s} {s}", .{
+            @tagName(self.opcode),
+            @tagName(self.width),
+        });
+    }
 };

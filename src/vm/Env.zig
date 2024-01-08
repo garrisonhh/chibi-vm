@@ -136,11 +136,26 @@ pub fn pop(env: *Env, comptime T: type) Error!T {
 }
 
 fn call(env: *Env, state: *State, dest: usize) Error!void {
+    env.stack.base = env.stack.top;
     try env.push(Stack.Trace, .{
         .base = env.stack.top,
         .pc = state.pc,
     });
     state.pc = dest;
+}
+
+/// reads i16 offset and returns pointer to it (used for get_local and set_local)
+fn localPtr(env: *Env, state: *State, comptime T: type) *T {
+    const offset = state.readValue(i16);
+    const abs_offset: usize = std.math.absCast(offset);
+
+    const base = @intFromPtr(env.stack.base);
+    const addr = if (offset < 0) base - abs_offset else base + abs_offset;
+    const ptr: *T = @ptrFromInt(addr);
+
+    // TODO verify addr
+
+    return ptr;
 }
 
 // execution ===================================================================
@@ -156,7 +171,7 @@ pub fn exec(
     so: *const SharedObject,
     name: []const u8,
 ) ExecError!void {
-    const offset = so.exports.get(name) orelse {
+    const start = so.exports.get(name) orelse {
         return ExecError.NoSuchFunction;
     };
 
@@ -166,7 +181,7 @@ pub fn exec(
         .code = so.code,
         .pc = so.code.len,
     };
-    try env.call(&state, offset);
+    try env.call(&state, start);
 
     // execute ops until halted
     while (state.pc < state.code.len) {
@@ -256,6 +271,16 @@ fn generic_subs(comptime W: Width) type {
         fn constant(env: *Env, state: *State) Error!void {
             const bytes = state.readNBytes(nbytes);
             try env.push([nbytes]u8, bytes);
+        }
+
+        fn get_local(env: *Env, state: *State) Error!void {
+            const ptr = env.localPtr(state, U);
+            try env.push(U, ptr.*);
+        }
+
+        fn set_local(env: *Env, state: *State) Error!void {
+            const ptr = env.localPtr(state, U);
+            ptr.* = try env.pop(U);
         }
 
         fn add(env: *Env, _: *State) Error!void {
