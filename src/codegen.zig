@@ -7,39 +7,42 @@ const AstObject = frontend.Object;
 const Node = frontend.Node;
 const Type = frontend.Type;
 const vm = @import("vm.zig");
+const Width = vm.Width;
+const Op = vm.Op;
 const Builder = vm.Builder;
 
-const Local = struct {
-    offset: i16,
-    size: usize,
-};
+const Context = struct {
+    const Local = struct {
+        offset: i16,
+        ty: *const Type,
+    };
+    const Locals = std.StringHashMapUnmanaged(Local);
 
-/// maps locals to metadata
-const Locals = std.StringHashMapUnmanaged(Local);
+    ret_params: u8,
+    /// maps locals to metadata
+    locals: Locals = .{},
+
+    fn deinit(ctx: *Context, ally: Allocator) void {
+        ctx.locals.deinit(ally);
+    }
+};
 
 fn unimplemented(comptime fmt: []const u8, args: anytype) !void {
     std.debug.print("unimplemented: " ++ fmt ++ "\n", args);
     return error.Unimplemented;
 }
 
-fn typeWidth(t: Type) ?vm.Width {
-    return switch (t.size) {
-        inline 1, 2, 4, 8 => |sz| vm.Width.fromBytes(sz),
-        else => null,
-    };
-}
-
-fn lowerNode(b: *Builder, locals: *const Locals, node: *const Node) !void {
+fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
     switch (node.data) {
         // as far as I can tell, this returns void/undefined
         .null_expr => {
             try b.op(.{ .constant = .{ .byte = .{0} } });
         },
         inline .add, .sub, .mod => |args, tag| {
-            const width = typeWidth(node.ty.?).?;
+            const width = Width.fromBytesExact(node.ty.?.size).?;
 
-            try lowerNode(b, locals, args[0]);
-            try lowerNode(b, locals, args[1]);
+            try lowerNode(b, ctx, args[0]);
+            try lowerNode(b, ctx, args[1]);
 
             // TODO floats
 
@@ -52,10 +55,10 @@ fn lowerNode(b: *Builder, locals: *const Locals, node: *const Node) !void {
         },
         inline .mul, .div => |args, tag| {
             const ty = node.ty.?;
-            const width = typeWidth(ty).?;
+            const width = Width.fromBytesExact(ty.size).?;
 
-            try lowerNode(b, locals, args[0]);
-            try lowerNode(b, locals, args[1]);
+            try lowerNode(b, ctx, args[0]);
+            try lowerNode(b, ctx, args[1]);
 
             if (ty.isInt()) {
                 const sign = switch (node.ty.?.data) {
@@ -63,7 +66,7 @@ fn lowerNode(b: *Builder, locals: *const Locals, node: *const Node) !void {
                     else => unreachable,
                 };
 
-                const op: vm.Op = switch (sign) {
+                const op: Op = switch (sign) {
                     .signed => switch (tag) {
                         .mul => .{ .muli = width },
                         .div => .{ .divi = width },
@@ -83,13 +86,13 @@ fn lowerNode(b: *Builder, locals: *const Locals, node: *const Node) !void {
             }
         },
         inline .deref, .expr_stmt, .@"return" => |child, tag| {
-            try lowerNode(b, locals, child);
+            try lowerNode(b, ctx, child);
 
-            const op: vm.Op = switch (comptime tag) {
+            const op: Op = switch (comptime tag) {
                 .expr_stmt => .drop,
-                .@"return" => .ret,
+                .@"return" => .{ .ret = ctx.ret_params },
                 .deref => .{ .load = .{
-                    .width = typeWidth(node.ty.?).?,
+                    .width = Width.fromBytesExact(node.ty.?.size).?,
                     .offset = 0,
                 } },
                 else => unreachable,
@@ -98,16 +101,16 @@ fn lowerNode(b: *Builder, locals: *const Locals, node: *const Node) !void {
             try b.op(op);
         },
         .comma => |args| {
-            try lowerNode(b, locals, args[0]);
-            try lowerNode(b, locals, args[1]);
+            try lowerNode(b, ctx, args[0]);
+            try lowerNode(b, ctx, args[1]);
         },
         .block => |nodes| {
             for (nodes) |*child| {
-                try lowerNode(b, locals, child);
+                try lowerNode(b, ctx, child);
             }
         },
         .cast => |child| {
-            try lowerNode(b, locals, child);
+            try lowerNode(b, ctx, child);
 
             const into = node.ty.?;
             const from = child.ty.?;
@@ -133,7 +136,7 @@ fn lowerNode(b: *Builder, locals: *const Locals, node: *const Node) !void {
             // all other casts are noops
         },
         .num => |num| {
-            const constant: vm.Op.Constant = switch (node.ty.?.data) {
+            const constant: Op.Constant = switch (node.ty.?.data) {
                 inline else => |_, tag| c: {
                     const T = switch (tag) {
                         .char => u8,
@@ -151,31 +154,27 @@ fn lowerNode(b: *Builder, locals: *const Locals, node: *const Node) !void {
                         else => unreachable,
                     };
 
-                    const width = comptime vm.Width.fromBytes(@sizeOf(T));
+                    const width = comptime Width.fromBytesExact(@sizeOf(T)).?;
                     const arr: [width.bytes()]u8 = @bitCast(value);
-                    break :c @unionInit(vm.Op.Constant, @tagName(width), arr);
+                    break :c @unionInit(Op.Constant, @tagName(width), arr);
                 },
             };
 
             try b.op(.{ .constant = constant });
         },
         .@"var" => |obj| {
-            if (locals.get(obj.name)) |meta| {
-                switch (meta.size) {
-                    1, 2, 4, 8 => {
-                        const width = vm.Width.fromBytes(@intCast(meta.size));
-                        try b.op(.{ .get_local = .{
-                            .width = width,
-                            .offset = meta.offset,
-                        } });
-                    },
-                    else => {
-                        try unimplemented("big/weird width locals", .{});
-                    },
-                }
+            if (ctx.locals.get(obj.name)) |local| {
+                try b.op(.{ .local = local.offset });
+                try b.op(.{ .load = .{
+                    .width = Width.fromBytesFit(local.ty.size).?,
+                    .offset = 0,
+                } });
             } else {
                 try unimplemented("global namespace", .{});
             }
+        },
+        .memzero => |obj| {
+            try unimplemented("TODO memzero {s}", .{obj.name});
         },
 
         else => {
@@ -190,55 +189,61 @@ fn lowerFunction(
     ty: Type,
     func: AstObject.FuncDef,
 ) !void {
-    // figure out stack
-    var locals = Locals{};
-    defer locals.deinit(b.ally);
+    var ctx = Context{
+        .ret_params = @intCast(func.params.len),
+    };
+    defer ctx.deinit(b.ally);
 
-    for (func.params, 0..) |param, i| {
-        // this has to be in reverse order because params are pushed in order
-        const offset = @as(i16, @intCast(func.params.len - i)) * -8;
-        try locals.put(b.ally, param.name, Local{
-            .offset = offset,
-            .size = param.ty.size,
+    // params are pushed in order below the stack frame
+    const param_fat_size = func.params.len * 8 + vm.Env.frame_size;
+
+    var param_offset = -@as(i16, @intCast(param_fat_size));
+    for (func.params) |param| {
+        try ctx.locals.put(b.ally, param.name, .{
+            .offset = param_offset,
+            .ty = &param.ty,
         });
+        param_offset += 8;
     }
 
-    var stack_size: usize = 0;
+    // locals get the size of their type, aligned as needed
+    // NOTE this could be more efficient in the future by sorting by inverse
+    // alignment
+    var stack_size: u15 = 0;
     for (func.locals) |local| {
         // ignore params
-        if (locals.contains(local.name)) continue;
+        if (ctx.locals.contains(local.name)) {
+            continue;
+        }
 
-        // reserve stack space for local
-        stack_size = std.mem.alignForward(usize, stack_size, local.ty.alignment);
-        const offset: i16 = @intCast(stack_size);
-        stack_size += local.ty.size;
+        // reserve stack space for local, ensuring alignment
+        stack_size = std.mem.alignForward(
+            u15,
+            stack_size,
+            @as(u15, @intCast(local.ty.alignment)),
+        );
 
-        try locals.put(b.ally, local.name, Local{
+        const offset: i16 = stack_size;
+        stack_size += @intCast(local.ty.size);
+
+        try ctx.locals.put(b.ally, local.name, .{
             .offset = offset,
-            .size = local.ty.size,
+            .ty = &local.ty,
         });
     }
-
-    // TODO remove
-    std.debug.print("[allocated {s} locals]\n", .{name});
-    for (func.locals) |local| {
-        const meta = locals.get(local.name).?;
-        std.debug.print("{s} -> {} bytes @ {}\n", .{ local.name, meta.size, meta.offset });
-    }
-    std.debug.print("\n", .{});
 
     // write code
     try b.@"export"(name);
-    try b.op(.{ .enter = @intCast(stack_size) });
+    try b.op(.{ .enter = stack_size });
 
     for (func.body) |node| {
-        try lowerNode(b, &locals, &node);
+        try lowerNode(b, &ctx, &node);
     }
 
     // handle implicit return for void functions
     if (ty.data.func.returns.data == .void) {
         try b.op(.{ .constant = .{ .byte = .{0} } });
-        try b.op(.ret);
+        try b.op(.{ .ret = ctx.ret_params });
     }
 }
 

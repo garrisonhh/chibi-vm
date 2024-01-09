@@ -14,9 +14,12 @@ the callee can then reserve as much stack as required, and parameter values
 can be accessed by peeking at the parameter location relative to the
 
 when returning, the callee...
-1. sets the stack top to the stack base
-2. reads the previous stack base and return location and overwrites the program
+1. pops the return value
+2. sets the stack top to the stack base
+3. pops the previous stack base and return location and overwrites the program
    counter and stack top with these values
+4. drops the arguments
+5. pushes the return value
 
 because of the way this is set up, this means that pushing/popping between
 function entry and exit is completely possible and sane. which is what the vm

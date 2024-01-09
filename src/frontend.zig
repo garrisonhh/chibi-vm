@@ -268,7 +268,7 @@ pub const Node = struct {
         vla_ptr,
         num: Number,
         cast: *Node,
-        memzero,
+        memzero: *Object,
         @"asm",
         cas,
         exch,
@@ -316,12 +316,9 @@ pub const Node = struct {
                 },
             ),
 
-            // complex
+            // more complex
             .block => Data{
                 .block = try fromChibiSlice(ally, node.body),
-            },
-            .@"var" => Data{
-                .@"var" = try Object.fromChibiAlloc(ally, node.@"var".?),
             },
             .num => Data{
                 .num = switch (ty.?.data) {
@@ -330,6 +327,11 @@ pub const Node = struct {
                     else => unreachable,
                 },
             },
+            inline .@"var", .memzero => |tag| @unionInit(
+                Data,
+                @tagName(tag),
+                try Object.fromChibiAlloc(ally, node.@"var".?),
+            ),
 
             inline else => |tag| @unionInit(Data, @tagName(tag), {}),
         };

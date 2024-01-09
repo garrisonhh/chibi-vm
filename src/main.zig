@@ -48,8 +48,8 @@ pub fn main() !void {
         .{
             .name = "test_file",
             .contents =
-            \\int deref(int *ptr) {
-            \\  return *ptr;
+            \\int f(int a) {
+            \\  return a * 2 + 3;
             \\}
             \\
             ,
@@ -62,7 +62,7 @@ pub fn main() !void {
     var env = try vm.Env.init(ally, .{});
     defer env.deinit(ally);
 
-    try env.push(*const i32, &@as(i32, 6));
-    try env.exec(&so, "deref");
+    try env.push(i32, 42);
+    try env.exec(&so, "f");
     std.debug.print("output: {}\n", .{try env.pop(i32)});
 }

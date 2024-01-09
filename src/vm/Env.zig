@@ -9,6 +9,18 @@ const Width = ops.Width;
 const objects = @import("objects.zig");
 const SharedObject = objects.SharedObject;
 
+// utils =======================================================================
+
+fn ptrAdd(comptime T: type, ptr: T, offset: isize) T {
+    std.debug.assert(@typeInfo(T) == .Pointer);
+
+    const iaddr: isize = @intCast(@intFromPtr(ptr));
+    const offset_addr: usize = @intCast(iaddr + offset);
+    return @ptrFromInt(offset_addr);
+}
+
+// env =========================================================================
+
 const Env = @This();
 
 pub const Error = error{
@@ -39,13 +51,17 @@ const State = struct {
     }
 };
 
+/// needed for function codegen
+pub const frame_size = Stack.aligned8Size(Stack.Frame);
+
 /// operation stack
 const Stack = struct {
     mem: []align(8) u8,
     base: [*]align(8) u8,
     top: [*]align(8) u8,
 
-    const FrameData = struct {
+    /// saved execution frame of a previous call
+    const Frame = struct {
         base: [*]align(8) u8,
         pc: usize,
     };
@@ -70,20 +86,31 @@ const Stack = struct {
         }
     }
 
+    /// reserve some bytes from the stack
     fn reserve(self: *Stack, nbytes: usize) Error!void {
         const sz = std.mem.alignForward(usize, nbytes, 8);
         if (self.used() + sz > self.mem.len) {
             return Error.VmStackOverflow;
         }
 
-        self.top = @ptrFromInt(@intFromPtr(self.top) + sz);
+        self.top = ptrAdd([*]align(8) u8, self.top, @intCast(sz));
+    }
+
+    /// drop some bytes from the stack
+    fn vacate(self: *Stack, nbytes: usize) Error!void {
+        const sz = std.mem.alignForward(usize, nbytes, 8);
+        if (self.used() < sz) {
+            return Error.VmStackUnderflow;
+        }
+
+        self.top = ptrAdd([*]align(8) u8, self.top, -@as(isize, @intCast(sz)));
     }
 
     fn peek(self: Stack, comptime T: type) ?T {
         const sz = aligned8Size(T);
         if (self.used() < sz) return null;
 
-        const ptr: *const T = @ptrFromInt(@intFromPtr(self.top) - sz);
+        const ptr: *const T = @ptrCast(ptrAdd([*]align(8) u8, self.top, -sz));
         return ptr.*;
     }
 
@@ -94,7 +121,7 @@ const Stack = struct {
         }
 
         @as(*T, @ptrCast(self.top)).* = value;
-        self.top = @ptrFromInt(@intFromPtr(self.top) + sz);
+        self.top = ptrAdd([*]align(8) u8, self.top, sz);
     }
 
     fn pop(self: *Stack, comptime T: type) Error!T {
@@ -103,7 +130,7 @@ const Stack = struct {
         };
 
         const sz = aligned8Size(T);
-        self.top = @ptrFromInt(@intFromPtr(self.top) - sz);
+        self.top = ptrAdd([*]align(8) u8, self.top, -sz);
         return value;
     }
 };
@@ -136,26 +163,12 @@ pub fn pop(env: *Env, comptime T: type) Error!T {
 }
 
 fn call(env: *Env, state: *State, dest: usize) Error!void {
-    env.stack.base = env.stack.top;
-    try env.push(Stack.FrameData, .{
+    try env.push(Stack.Frame, .{
         .base = env.stack.top,
         .pc = state.pc,
     });
+    env.stack.base = env.stack.top;
     state.pc = dest;
-}
-
-/// reads i16 offset and returns pointer to it (used for get_local and set_local)
-fn localPtr(env: *Env, state: *State, comptime T: type) *T {
-    const offset = state.readValue(i16);
-    const abs_offset: usize = std.math.absCast(offset);
-
-    const base = @intFromPtr(env.stack.base);
-    const addr = if (offset < 0) base - abs_offset else base + abs_offset;
-    const ptr: *T = @ptrFromInt(addr);
-
-    // TODO verify addr
-
-    return ptr;
 }
 
 // execution ===================================================================
@@ -187,6 +200,8 @@ pub fn exec(
     while (state.pc < state.code.len) {
         const byte = state.readByte();
         const sub = byte_subs[byte] orelse {
+            const byte_op: ByteOp = @bitCast(byte);
+            std.debug.print("couldn't find byte op: {}\n", .{byte_op});
             return ExecError.InvalidByteOp;
         };
 
@@ -247,14 +262,32 @@ const monomorphic_subs = struct {
     }
 
     fn ret(env: *Env, state: *State) Error!void {
-        const return_value = try env.pop(u64);
+        const ret_params: usize = state.readValue(u8);
 
-        const trace: *const Stack.FrameData = @ptrCast(env.stack.base);
+        // get return value
+        const return_value = try env.pop([8]u8);
+
+        // revert frame and pc
         env.stack.top = env.stack.base;
-        env.stack.base = trace.base;
-        state.pc = trace.pc;
+        const frame = try env.pop(Stack.Frame);
+        env.stack.base = frame.base;
+        state.pc = frame.pc;
 
-        try env.push(u64, return_value);
+        // remove params
+        try env.stack.vacate(ret_params * 8);
+
+        // push back return value
+        try env.push([8]u8, return_value);
+    }
+
+    fn drop(env: *Env, _: *State) Error!void {
+        _ = try env.pop(u8);
+    }
+
+    fn local(env: *Env, state: *State) Error!void {
+        const offset = state.readValue(i16);
+        const ptr = ptrAdd(*anyopaque, env.stack.base, offset);
+        try env.push(*anyopaque, ptr);
     }
 };
 
@@ -271,23 +304,6 @@ fn generic_subs(comptime W: Width) type {
         fn constant(env: *Env, state: *State) Error!void {
             const bytes = state.readNBytes(nbytes);
             try env.push([nbytes]u8, bytes);
-        }
-
-        fn get_local(env: *Env, state: *State) Error!void {
-            const ptr = env.localPtr(state, U);
-            try env.push(U, ptr.*);
-        }
-
-        fn set_local(env: *Env, state: *State) Error!void {
-            const ptr = env.localPtr(state, U);
-            ptr.* = try env.pop(U);
-        }
-
-        fn load(env: *Env, state: *State) Error!void {
-            const offset = state.readValue(u16);
-            const base = try env.pop(*U);
-            const ptr: *U = @ptrFromInt(@intFromPtr(base) + offset);
-            try env.push(U, ptr.*);
         }
 
         fn add(env: *Env, _: *State) Error!void {
@@ -320,6 +336,13 @@ fn generic_subs(comptime W: Width) type {
 
         fn neg(env: *Env, _: *State) Error!void {
             try env.push(I, -try env.pop(I));
+        }
+
+        fn load(env: *Env, state: *State) Error!void {
+            const offset = state.readValue(i16);
+            const start = try env.pop(*U);
+            const ptr = ptrAdd(*U, start, offset);
+            try env.push(U, ptr.*);
         }
     };
 }

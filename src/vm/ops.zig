@@ -2,17 +2,20 @@ const std = @import("std");
 
 pub const Opcode = enum(u6) {
     halt = 0,
-    // set up a function. reads 2 bytes as u16 for the stack size
+
+    /// reads a u16 for the stack size, and adds it to the stack pointer
     enter,
-    // drop the function stack and return
+
+    /// reads a u8 for the number of parameters to pop
+    /// exits a function:
+    /// 1. pops the return value on the operand stack
+    /// 2. returns execution to the previous instruction and frame
+    /// 3. removes the parameters provided
+    /// 4. pushes the return value back to the operand stack
     ret,
 
     // read value bytes from code and push to stack
     constant,
-    // read <width> bytes at i16 offset (negatives are needed for parameters)
-    get_local,
-    // write <width> bytes at i16 offset
-    set_local,
     // remove a stack value
     drop,
 
@@ -33,10 +36,13 @@ pub const Opcode = enum(u6) {
     sign_extend, // i8/i16/i32 -> i64
     sign_narrow, // i64 -> i8/i16/i32
 
-    // load is a little complex:
-    // - reads offset as u16 from bytecode
-    // - pops pointer
-    // - derefs `width` bytes at `pointer + offset * width` and pushes
+    // 1. reads offset as i16 from bytecode
+    // 2. pushes `base_pointer + offset` to stack
+    local,
+
+    // 1. reads offset as u16 from bytecode
+    // 2. pops pointer
+    // 3. derefs `width` bytes at `pointer + offset * width` and pushes
     // (this arrived unintentionaly super close to the design of x86 mov!)
     load,
     // store,
@@ -56,21 +62,33 @@ pub const Width = enum(u2) {
         return @as(u4, 1) << @intFromEnum(w);
     }
 
-    pub fn fromBytes(nbytes: u4) Width {
-        inline for (comptime std.enums.values(Width)) |w| {
-            if (w.bytes() == nbytes) {
-                return w;
-            }
-        } else {
-            std.debug.panic("invalid number of bytes: {}\n", .{nbytes});
-        }
+    pub fn fromBytesExact(nbytes: usize) ?Width {
+        return switch (nbytes) {
+            1 => .byte,
+            2 => .short,
+            4 => .half,
+            8 => .word,
+            else => null,
+        };
+    }
+
+    pub fn fromBytesFit(nbytes: usize) ?Width {
+        return switch (nbytes) {
+            1 => .byte,
+            2 => .short,
+            3, 4 => .half,
+            5, 6, 7, 8 => .word,
+            else => null,
+        };
     }
 };
 
 /// meta description of ops for verification
-pub const StackEffect = struct {
+pub const Meta = struct {
     inputs: usize,
     outputs: usize,
+    // additional bytes read from the bytecode
+    // TODO reads: usize,
 };
 
 /// high level op description (compiled into bytecode)
@@ -82,12 +100,6 @@ pub const Op = union(Opcode) {
         word: [8]u8,
     };
 
-    pub const Local = struct {
-        width: Width,
-        /// offset into the stack frame
-        offset: i16,
-    };
-
     pub const Address = struct {
         width: Width,
         /// offset from the pointer
@@ -95,11 +107,11 @@ pub const Op = union(Opcode) {
     };
 
     halt,
+    /// data is frame size
     enter: u16,
-    ret,
+    /// data is number of parameters
+    ret: u8,
     constant: Constant,
-    get_local: Local,
-    set_local: Local,
     drop,
     add: Width,
     sub: Width,
@@ -111,11 +123,13 @@ pub const Op = union(Opcode) {
     neg: Width,
     sign_extend: Width,
     sign_narrow: Width,
+    /// data is offset from base pointer
+    local: i16,
     load: Address,
 
     /// get the opcode meta description for code verification
     /// *works in comptime*
-    pub fn stackEffect(o: Op) StackEffect {
+    pub fn meta(o: Op) Meta {
         const StackEffectTuple = struct {
             @"0": usize,
             @"1": usize,
@@ -127,10 +141,9 @@ pub const Op = union(Opcode) {
             .ret,
             => .{ 0, 0 },
             .constant,
-            .get_local,
+            .local,
             => .{ 0, 1 },
             .drop,
-            .set_local,
             => .{ 1, 0 },
             .neg,
             .sign_extend,
@@ -146,7 +159,7 @@ pub const Op = union(Opcode) {
             => .{ 2, 1 },
         };
 
-        return StackEffect{
+        return Meta{
             .inputs = tup.@"0",
             .outputs = tup.@"1",
         };
