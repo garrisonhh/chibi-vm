@@ -45,7 +45,7 @@ const Stack = struct {
     base: [*]align(8) u8,
     top: [*]align(8) u8,
 
-    const Trace = struct {
+    const FrameData = struct {
         base: [*]align(8) u8,
         pc: usize,
     };
@@ -137,7 +137,7 @@ pub fn pop(env: *Env, comptime T: type) Error!T {
 
 fn call(env: *Env, state: *State, dest: usize) Error!void {
     env.stack.base = env.stack.top;
-    try env.push(Stack.Trace, .{
+    try env.push(Stack.FrameData, .{
         .base = env.stack.top,
         .pc = state.pc,
     });
@@ -249,7 +249,7 @@ const monomorphic_subs = struct {
     fn ret(env: *Env, state: *State) Error!void {
         const return_value = try env.pop(u64);
 
-        const trace: *const Stack.Trace = @ptrCast(env.stack.base);
+        const trace: *const Stack.FrameData = @ptrCast(env.stack.base);
         env.stack.top = env.stack.base;
         env.stack.base = trace.base;
         state.pc = trace.pc;
@@ -281,6 +281,13 @@ fn generic_subs(comptime W: Width) type {
         fn set_local(env: *Env, state: *State) Error!void {
             const ptr = env.localPtr(state, U);
             ptr.* = try env.pop(U);
+        }
+
+        fn load(env: *Env, state: *State) Error!void {
+            const offset = state.readValue(u16);
+            const base = try env.pop(*U);
+            const ptr: *U = @ptrFromInt(@intFromPtr(base) + offset);
+            try env.push(U, ptr.*);
         }
 
         fn add(env: *Env, _: *State) Error!void {

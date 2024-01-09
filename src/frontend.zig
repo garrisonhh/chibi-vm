@@ -245,7 +245,7 @@ pub const Node = struct {
         comma: [2]*Node,
         member,
         addr,
-        deref,
+        deref: *Node,
         not,
         bitnot,
         logand,
@@ -283,6 +283,20 @@ pub const Node = struct {
         } else null;
 
         const data: Data = switch (node.kind) {
+            // unary
+            inline .neg,
+            .deref,
+            .@"return",
+            .cast,
+            .expr_stmt,
+            .stmt_expr,
+            => |tag| @unionInit(
+                Data,
+                @tagName(tag),
+                try fromChibiAlloc(ally, node.lhs.?),
+            ),
+
+            // binary
             inline .add,
             .sub,
             .mul,
@@ -302,17 +316,7 @@ pub const Node = struct {
                 },
             ),
 
-            inline .neg,
-            .@"return",
-            .cast,
-            .expr_stmt,
-            .stmt_expr,
-            => |tag| @unionInit(
-                Data,
-                @tagName(tag),
-                try fromChibiAlloc(ally, node.lhs.?),
-            ),
-
+            // complex
             .block => Data{
                 .block = try fromChibiSlice(ally, node.body),
             },

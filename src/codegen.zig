@@ -31,22 +31,75 @@ fn typeWidth(t: Type) ?vm.Width {
 
 fn lowerNode(b: *Builder, locals: *const Locals, node: *const Node) !void {
     switch (node.data) {
-        .null_expr => unreachable,
-        inline .add, .sub => |args, tag| {
+        // as far as I can tell, this returns void/undefined
+        .null_expr => {
+            try b.op(.{ .constant = .{ .byte = .{0} } });
+        },
+        inline .add, .sub, .mod => |args, tag| {
             const width = typeWidth(node.ty.?).?;
 
             try lowerNode(b, locals, args[0]);
             try lowerNode(b, locals, args[1]);
 
+            // TODO floats
+
             switch (comptime tag) {
                 .add => try b.op(.{ .add = width }),
                 .sub => try b.op(.{ .sub = width }),
+                .mod => try b.op(.{ .mod = width }),
                 else => unreachable,
             }
         },
-        .@"return" => |child| {
+        inline .mul, .div => |args, tag| {
+            const ty = node.ty.?;
+            const width = typeWidth(ty).?;
+
+            try lowerNode(b, locals, args[0]);
+            try lowerNode(b, locals, args[1]);
+
+            if (ty.isInt()) {
+                const sign = switch (node.ty.?.data) {
+                    .char, .short, .int, .long => |meta| meta.signedness,
+                    else => unreachable,
+                };
+
+                const op: vm.Op = switch (sign) {
+                    .signed => switch (tag) {
+                        .mul => .{ .muli = width },
+                        .div => .{ .divi = width },
+                        else => unreachable,
+                    },
+                    .unsigned => switch (tag) {
+                        .mul => .{ .mulu = width },
+                        .div => .{ .divu = width },
+                        else => unreachable,
+                    },
+                };
+
+                try b.op(op);
+            } else {
+                std.debug.assert(ty.isFloat());
+                try unimplemented("mul/div float", .{});
+            }
+        },
+        inline .deref, .expr_stmt, .@"return" => |child, tag| {
             try lowerNode(b, locals, child);
-            try b.op(.ret);
+
+            const op: vm.Op = switch (comptime tag) {
+                .expr_stmt => .drop,
+                .@"return" => .ret,
+                .deref => .{ .load = .{
+                    .width = typeWidth(node.ty.?).?,
+                    .offset = 0,
+                } },
+                else => unreachable,
+            };
+
+            try b.op(op);
+        },
+        .comma => |args| {
+            try lowerNode(b, locals, args[0]);
+            try lowerNode(b, locals, args[1]);
         },
         .block => |nodes| {
             for (nodes) |*child| {
@@ -176,7 +229,7 @@ fn lowerFunction(
 
     // write code
     try b.@"export"(name);
-    try b.op(.{ .enter = stack_size });
+    try b.op(.{ .enter = @intCast(stack_size) });
 
     for (func.body) |node| {
         try lowerNode(b, &locals, &node);

@@ -33,8 +33,14 @@ pub const Opcode = enum(u6) {
     sign_extend, // i8/i16/i32 -> i64
     sign_narrow, // i64 -> i8/i16/i32
 
-    // load,
+    // load is a little complex:
+    // - reads offset as u16 from bytecode
+    // - pops pointer
+    // - derefs `width` bytes at `pointer + offset * width` and pushes
+    // (this arrived unintentionaly super close to the design of x86 mov!)
+    load,
     // store,
+
     // read,
     // write,
 };
@@ -78,11 +84,18 @@ pub const Op = union(Opcode) {
 
     pub const Local = struct {
         width: Width,
+        /// offset into the stack frame
         offset: i16,
     };
 
+    pub const Address = struct {
+        width: Width,
+        /// offset from the pointer
+        offset: u16,
+    };
+
     halt,
-    enter: usize,
+    enter: u16,
     ret,
     constant: Constant,
     get_local: Local,
@@ -98,6 +111,7 @@ pub const Op = union(Opcode) {
     neg: Width,
     sign_extend: Width,
     sign_narrow: Width,
+    load: Address,
 
     /// get the opcode meta description for code verification
     /// *works in comptime*
