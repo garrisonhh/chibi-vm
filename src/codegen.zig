@@ -32,6 +32,24 @@ fn unimplemented(comptime fmt: []const u8, args: anytype) !void {
     return error.Unimplemented;
 }
 
+/// lower a node as its address (for lvalues, for example)
+fn lowerAddr(b: *Builder, ctx: *const Context, node: *const Node) !void {
+    switch (node.data) {
+        .@"var" => |obj| {
+            if (ctx.locals.get(obj.name)) |local| {
+                try b.op(.{ .local = local.offset });
+            } else {
+                try unimplemented("global namespace", .{});
+            }
+        },
+
+        else => {
+            try unimplemented("{}", .{@as(std.meta.Tag(Node.Data), node.data)});
+        },
+    }
+}
+
+/// lower a statement node or a node being read as a value
 fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
     switch (node.data) {
         // as far as I can tell, this returns void/undefined
@@ -100,8 +118,25 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
 
             try b.op(op);
         },
+        .assign => |args| {
+            try lowerAddr(b, ctx, args[0]);
+            try lowerNode(b, ctx, args[1]);
+
+            if (Width.fromBytesFit(args[0].ty.?.size)) |width| {
+                try b.op(.{ .store = .{
+                    .width = width,
+                    .offset = 0,
+                } });
+
+                // TODO assignment in C is supposed to return the value
+                try b.op(.{ .constant = .{ .byte = .{0} } });
+            } else {
+                try unimplemented("assign with big values", .{});
+            }
+        },
         .comma => |args| {
             try lowerNode(b, ctx, args[0]);
+            try b.op(.drop);
             try lowerNode(b, ctx, args[1]);
         },
         .block => |nodes| {
@@ -174,7 +209,12 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
             }
         },
         .memzero => |obj| {
-            try unimplemented("TODO memzero {s}", .{obj.name});
+            if (ctx.locals.get(obj.name)) |local| {
+                try b.op(.{ .local = local.offset });
+                try b.op(.{ .zero = @intCast(local.ty.size) });
+            } else {
+                try unimplemented("global namespace", .{});
+            }
         },
 
         else => {
@@ -213,6 +253,9 @@ fn lowerFunction(
     for (func.locals) |local| {
         // ignore params
         if (ctx.locals.contains(local.name)) {
+            continue;
+        } else if (std.mem.eql(u8, local.name, "__alloca_size__")) {
+            // ignore a chibi artifact
             continue;
         }
 

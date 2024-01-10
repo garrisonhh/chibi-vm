@@ -100,11 +100,19 @@ pub const Builder = struct {
         // create byte op from op and append
         var bo = ByteOp{ .opcode = o };
         switch (o) {
-            .halt, .enter, .ret, .drop, .local => {},
+            .halt,
+            .enter,
+            .ret,
+            .drop,
+            .local,
+            .zero,
+            .copy,
+            => {},
+
             .constant => |c| {
                 bo.width = c;
             },
-            .load => |addr| {
+            .load, .store => |addr| {
                 bo.width = addr.width;
             },
 
@@ -140,8 +148,11 @@ pub const Builder = struct {
             .local => |offset| {
                 try self.code.appendSlice(ally, std.mem.asBytes(&offset));
             },
-            .load => |addr| {
+            .load, .store => |addr| {
                 try self.code.appendSlice(ally, std.mem.asBytes(&addr.offset));
+            },
+            .zero, .copy => |length| {
+                try self.code.appendSlice(ally, std.mem.asBytes(&length));
             },
 
             else => {},

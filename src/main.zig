@@ -49,7 +49,8 @@ pub fn main() !void {
             .name = "test_file",
             .contents =
             \\int f(int a) {
-            \\  return a * 2 + 3;
+            \\  int b = a * 2 + 3;
+            \\  return b;
             \\}
             \\
             ,
@@ -58,6 +59,13 @@ pub fn main() !void {
 
     var so = try compile(ally, &sources);
     defer so.deinit(ally);
+
+    std.debug.print("[bytecode]\n", .{});
+    var iter = vm.iterateBytecode(so.code);
+    while (iter.next()) |op| {
+        std.debug.print("{}\n", .{op});
+    }
+    std.debug.print("\n", .{});
 
     var env = try vm.Env.init(ally, .{});
     defer env.deinit(ally);

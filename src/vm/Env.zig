@@ -150,8 +150,8 @@ pub fn deinit(env: *Env, ally: Allocator) void {
     ally.free(env.stack.mem);
 }
 
-pub fn peek(env: Env, comptime T: type) ?T {
-    return env.stack.peek(T);
+pub fn peek(env: Env, comptime T: type) Error!T {
+    return env.stack.peek(T) orelse Error.VmStackUnderflow;
 }
 
 pub fn push(env: *Env, comptime T: type, data: T) Error!void {
@@ -198,10 +198,10 @@ pub fn exec(
 
     // execute ops until halted
     while (state.pc < state.code.len) {
+        std.debug.print("EXEC {}\n", .{ops.firstOp(state.code[state.pc..])});
+
         const byte = state.readByte();
         const sub = byte_subs[byte] orelse {
-            const byte_op: ByteOp = @bitCast(byte);
-            std.debug.print("couldn't find byte op: {}\n", .{byte_op});
             return ExecError.InvalidByteOp;
         };
 
@@ -289,6 +289,19 @@ const monomorphic_subs = struct {
         const ptr = ptrAdd(*anyopaque, env.stack.base, offset);
         try env.push(*anyopaque, ptr);
     }
+
+    fn zero(env: *Env, state: *State) Error!void {
+        const nbytes = state.readValue(u32);
+        const ptr = try env.peek([*]u8);
+        @memset(ptr[0..nbytes], 0);
+    }
+
+    fn copy(env: *Env, state: *State) Error!void {
+        const nbytes = state.readValue(u32);
+        const src = try env.pop([*]u8);
+        const dst = try env.peek([*]u8);
+        @memcpy(dst[0..nbytes], src[0..nbytes]);
+    }
 };
 
 /// subroutines for opcodes which are generic over width
@@ -339,10 +352,16 @@ fn generic_subs(comptime W: Width) type {
         }
 
         fn load(env: *Env, state: *State) Error!void {
-            const offset = state.readValue(i16);
-            const start = try env.pop(*U);
-            const ptr = ptrAdd(*U, start, offset);
-            try env.push(U, ptr.*);
+            const offset = state.readValue(u16);
+            const start = try env.pop([*]U);
+            try env.push(U, start[offset]);
+        }
+
+        fn store(env: *Env, state: *State) Error!void {
+            const offset = state.readValue(u16);
+            const data = try env.pop(U);
+            const start = try env.pop([*]U);
+            start[offset] = data;
         }
     };
 }
