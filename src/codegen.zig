@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const in_debug = @import("builtin").mode == .Debug;
 const frontend = @import("frontend.zig");
 const AstObject = frontend.Object;
 const Node = frontend.Node;
@@ -16,6 +17,7 @@ const Context = struct {
         offset: i16,
         ty: *const Type,
     };
+
     const Locals = std.StringHashMapUnmanaged(Local);
 
     ret_params: u8,
@@ -32,15 +34,25 @@ fn unimplemented(comptime fmt: []const u8, args: anytype) !void {
     return error.Unimplemented;
 }
 
+fn lowerObjAddr(b: *Builder, ctx: *const Context, obj: *const AstObject) !void {
+    if (ctx.locals.get(obj.name)) |local| {
+        try b.op(.{ .local = local.offset });
+    } else {
+        const lbl = b.getGlobal(obj.name) orelse {
+            if (in_debug) {
+                std.debug.panic("unknown object name: {s}", .{obj.name});
+            }
+            unreachable;
+        };
+        try b.op(.{ .label = lbl });
+    }
+}
+
 /// lower a node as its address (for lvalues, for example)
 fn lowerAddr(b: *Builder, ctx: *const Context, node: *const Node) !void {
     switch (node.data) {
         .@"var" => |obj| {
-            if (ctx.locals.get(obj.name)) |local| {
-                try b.op(.{ .local = local.offset });
-            } else {
-                try unimplemented("global namespace", .{});
-            }
+            try lowerObjAddr(b, ctx, obj);
         },
 
         else => {
@@ -188,6 +200,14 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
 
             try b.resolve(end);
         },
+        .funcall => |fc| {
+            for (fc.args) |*arg| {
+                try lowerNode(b, ctx, arg);
+            }
+
+            try lowerAddr(b, ctx, fc.func);
+            try b.op(.call);
+        },
         .num => |num| {
             const constant: Op.Constant = switch (node.ty.?.data) {
                 inline else => |_, tag| c: {
@@ -216,6 +236,7 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
             try b.op(.{ .constant = constant });
         },
         .@"var" => |obj| {
+
             if (ctx.locals.get(obj.name)) |local| {
                 try b.op(.{ .local = local.offset });
                 try b.op(.{ .load = .{
@@ -294,7 +315,8 @@ fn lowerFunction(
     }
 
     // write code
-    try b.@"export"(name);
+    // TODO respect static functions with ns vvv
+    try b.global(name, .global, try b.label());
     try b.op(.{ .enter = stack_size });
 
     for (func.body) |node| {
@@ -310,7 +332,11 @@ fn lowerFunction(
 
 pub fn lower(ally: Allocator, ast: []const frontend.Object) !vm.Object {
     var b = Builder.init(ally);
-    for (ast) |it| {
+    defer b.deinit();
+
+    // ast comes in reverse order
+    var iter = std.mem.reverseIterator(ast);
+    while (iter.next()) |it| {
         try lowerFunction(&b, it.name, it.ty, it.data.func_def);
     }
 

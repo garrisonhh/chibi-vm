@@ -8,7 +8,7 @@ const ByteOp = ops.ByteOp;
 const Export = struct {
     name: []const u8,
     /// address of label
-    offset: usize,
+    offset: u32,
 };
 
 /// a bytecode translation unit
@@ -24,7 +24,7 @@ pub const Object = struct {
 
 /// fully linked and executable bytecode
 pub const Module = struct {
-    pub const Exports = std.StringHashMapUnmanaged(usize);
+    pub const Exports = std.StringHashMapUnmanaged(u32);
 
     code: []const u8,
     /// maps label -> offset
@@ -44,6 +44,13 @@ pub const Module = struct {
 pub const Builder = struct {
     const Self = @This();
 
+    const Global = struct {
+        const Namespace = enum { module, global };
+
+        ns: Namespace,
+        label: Label,
+    };
+
     pub const Label = struct {
         index: usize,
 
@@ -61,7 +68,7 @@ pub const Builder = struct {
 
     ally: Allocator,
     code: std.ArrayListUnmanaged(u8) = .{},
-    exports: std.ArrayListUnmanaged(Export) = .{},
+    globals: std.StringHashMapUnmanaged(Global) = .{},
 
     /// maps label (as index) -> code index
     labels: std.ArrayListUnmanaged(?u32) = .{},
@@ -76,7 +83,7 @@ pub const Builder = struct {
         var ally = self.ally;
 
         self.code.deinit(ally);
-        self.exports.deinit(ally);
+        self.globals.deinit(ally);
 
         self.labels.deinit(ally);
         var backref_lists = self.backrefs.valueIterator();
@@ -90,9 +97,30 @@ pub const Builder = struct {
 
         self.resolveBackrefs();
 
+        var exports = std.ArrayListUnmanaged(Export){};
+        defer exports.deinit(ally);
+
+        var globals = self.globals.iterator();
+        while (globals.next()) |entry| {
+            const name = entry.key_ptr.*;
+            const meta = entry.value_ptr.*;
+
+            // don't export module-level names
+            if (meta.ns == .module) {
+                continue;
+            }
+
+            // guaranteed valid by `resolveBackrefs()`
+            const loc = self.labels.items[meta.label.index].?;
+            try exports.append(ally, .{
+                .name = name,
+                .offset = loc,
+            });
+        }
+
         return Object{
             .code = try self.code.toOwnedSlice(ally),
-            .exports = try self.exports.toOwnedSlice(ally),
+            .exports = try exports.toOwnedSlice(ally),
         };
     }
 
@@ -118,13 +146,27 @@ pub const Builder = struct {
         }
     }
 
-    /// exports a label from the current location in code
+    /// add an name to a label
     /// *name must outlive builder + object*
-    pub fn @"export"(self: *Self, name: []const u8) Allocator.Error!void {
-        try self.exports.append(self.ally, Export{
-            .name = name,
-            .offset = self.code.items.len,
+    pub fn global(
+        self: *Self,
+        name: []const u8,
+        ns: Global.Namespace,
+        lbl: Label,
+    ) Allocator.Error!void {
+        std.debug.assert(!self.globals.contains(name));
+        try self.globals.put(self.ally, name, Global{
+            .ns = ns,
+            .label = lbl,
         });
+    }
+
+    pub fn getGlobal(self: *const Self, name: []const u8) ?Label {
+        if (self.globals.get(name)) |meta| {
+            return meta.label;
+        }
+
+        return null;
     }
 
     /// create an unresolved (future) label
@@ -161,6 +203,7 @@ pub const Builder = struct {
         // construct byteop
         const width: ?ops.Width = switch (o) {
             .halt,
+            .label,
             .enter,
             .ret,
             .drop,
@@ -168,6 +211,7 @@ pub const Builder = struct {
             .zero,
             .copy,
             .jump,
+            .call,
             => null,
 
             .add,
@@ -217,9 +261,9 @@ pub const Builder = struct {
             .zero, .copy => |length| {
                 extra.appendSliceAssumeCapacity(std.mem.asBytes(&length));
             },
-            inline .jump, .jz, .jnz => |data, tag| {
+            inline .label, .jump, .jz, .jnz => |data, tag| {
                 const lbl: Label = switch (comptime tag) {
-                    .jump => data,
+                    .label, .jump => data,
                     .jz, .jnz => data.dest,
                     else => unreachable,
                 };

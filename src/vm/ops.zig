@@ -17,9 +17,11 @@ pub const Opcode = enum(u6) {
     /// 4. pushes the return value back to the operand stack
     ret,
 
-    // read value bytes from code and push to stack
+    /// read value bytes from code and push to stack
     constant,
-    // remove a stack value
+    /// read code loc from code and push to stack
+    label,
+    /// remove a stack value
     drop,
 
     // binary twos-complement 64-bit math
@@ -66,6 +68,8 @@ pub const Opcode = enum(u6) {
     jz,
     /// reads u32, pops sized value, and if it's not zero then jump
     jnz,
+    /// pops u32 and calls it
+    call,
 
     pub const Meta = struct {
         /// popped values
@@ -84,6 +88,7 @@ pub const Opcode = enum(u6) {
             .enter => .{ .inputs = 0, .outputs = 0, .sized = false },
             .ret => .{ .inputs = 1, .outputs = 0, .sized = false },
             .constant => .{ .inputs = 0, .outputs = 1, .sized = true },
+            .label => .{ .inputs = 0, .outputs = 1, .sized = false },
             .drop => .{ .inputs = 1, .outputs = 0, .sized = false },
             .local => .{ .inputs = 0, .outputs = 1, .sized = false },
             .load => .{ .inputs = 1, .outputs = 1, .sized = true },
@@ -108,6 +113,7 @@ pub const Opcode = enum(u6) {
 
             .jump => .{ .inputs = 0, .outputs = 0, .sized = false },
             .jz, .jnz => .{ .inputs = 1, .outputs = 0, .sized = true },
+            .call => .{ .inputs = 1, .outputs = 0, .sized = false },
         };
     }
 };
@@ -169,6 +175,7 @@ pub const ByteOp = packed struct(u8) {
             .neg,
             .sign_extend,
             .sign_narrow,
+            .call,
             => 0,
 
             .ret => 1,
@@ -177,6 +184,7 @@ pub const ByteOp = packed struct(u8) {
             .load,
             .store,
             => 2,
+            .label,
             .zero,
             .copy,
             .jump,
@@ -215,6 +223,7 @@ pub const Op = union(Opcode) {
     /// data is number of parameters
     ret: u8,
     constant: Constant,
+    label: Label,
     drop,
     add: Width,
     sub: Width,
@@ -237,6 +246,7 @@ pub const Op = union(Opcode) {
     jump: Label,
     jz: CondJmp,
     jnz: CondJmp,
+    call,
 
     pub fn format(
         op: Op,

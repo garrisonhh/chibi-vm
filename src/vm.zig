@@ -13,7 +13,7 @@ test "add" {
     const ally = std.testing.allocator;
     var builder = vm.Builder.init(ally);
 
-    try builder.@"export"("add");
+    try builder.global("add");
     try builder.op(.{ .add = .word });
     try builder.op(.ret);
 

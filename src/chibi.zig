@@ -218,7 +218,7 @@ pub const Node = extern struct {
     body: ?*Node,
     member: [*c]Member,
     func_ty: [*c]Type,
-    args: [*c]Node,
+    args: ?*Node,
     pass_by_stack: bool,
     ret_buffer: [*c]Obj,
     label: [*c]u8,

@@ -229,6 +229,11 @@ pub const Node = struct {
         float: f64,
     };
 
+    pub const Funcall = struct {
+        func: *Node,
+        args: []const Node,
+    };
+
     pub const Data = union(chibi.NodeKind) {
         null_expr,
         add: [2]*Node,
@@ -267,7 +272,7 @@ pub const Node = struct {
         goto_expr,
         label,
         label_val,
-        funcall,
+        funcall: Funcall,
         expr_stmt: *Node,
         stmt_expr: *Node,
         @"var": *Object,
@@ -345,6 +350,10 @@ pub const Node = struct {
                 @tagName(tag),
                 try Object.fromChibiAlloc(ally, node.@"var".?),
             ),
+            .funcall => Data{ .funcall = .{
+                .func = try fromChibiAlloc(ally, node.lhs.?),
+                .args = try fromChibiSlice(ally, node.args),
+            } },
 
             inline else => |tag| @unionInit(Data, @tagName(tag), {}),
         };
@@ -386,6 +395,12 @@ pub const Node = struct {
                     meta.cond.dumpIndented(level + 1);
                     meta.then.dumpIndented(level + 1);
                     meta.@"else".dumpIndented(level + 1);
+                },
+                Funcall => {
+                    meta.func.dumpIndented(level + 1);
+                    for (meta.args) |arg| {
+                        arg.dumpIndented(level + 1);
+                    }
                 },
                 Number => {
                     for (0..(level + 1) * 2) |_| std.debug.print(" ", .{});
@@ -509,6 +524,8 @@ pub const Object = struct {
             "[{s}] {s}: {}\n",
             .{ @tagName(self.data), self.name, self.ty },
         );
+
+        if (level > 0) return;
 
         switch (self.data) {
             .var_def => |vd| {

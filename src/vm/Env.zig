@@ -163,9 +163,9 @@ pub fn pop(env: *Env, comptime T: type) Error!T {
     return env.stack.pop(T);
 }
 
-fn call(env: *Env, state: *State, dest: usize) Error!void {
-    try env.push(Stack.Frame, .{
-        .base = env.stack.top,
+fn call(env: *Env, state: *State, dest: u32) Error!void {
+    try env.push(Stack.Frame, Stack.Frame{
+        .base = env.stack.base,
         .pc = state.pc,
     });
     env.stack.base = env.stack.top;
@@ -180,12 +180,15 @@ pub const ExecError = Allocator.Error || Error || error{
 };
 
 /// writes the next op to stderr for debugging
-fn dumpNext(state: State) void {
+fn dumpNext(env: *const Env, state: State) void {
     const code = state.code[state.pc..];
     const byteop: ByteOp = @bitCast(code[0]);
     const extra = code[1 .. 1 + byteop.extraBytes()];
 
-    std.debug.print("{d:>6} | {s}", .{ state.pc, @tagName(byteop.opcode) });
+    std.debug.print(
+        "{d:>6} | {d:>6} | {s}",
+        .{ state.pc, env.stack.used(), @tagName(byteop.opcode) },
+    );
     if (byteop.opcode.meta().sized) {
         std.debug.print(" {s}", .{@tagName(byteop.width)});
     }
@@ -196,12 +199,18 @@ fn dumpNext(state: State) void {
             inline 1, 2, 4, 8 => |sz| {
                 const bytes: *const [sz]u8 = @ptrCast(extra.ptr);
 
-                const U = std.meta.Int(.unsigned, 8 * sz);
-                const I = std.meta.Int(.signed, 8 * sz);
-                const u = std.mem.bytesAsValue(U, bytes).*;
-                const i = std.mem.bytesAsValue(I, bytes).*;
-
-                std.debug.print(" (u: {d} i: {d})", .{ u, i });
+                switch (byteop.opcode) {
+                    .local => {
+                        const I = std.meta.Int(.signed, 8 * sz);
+                        const n = std.mem.bytesAsValue(I, bytes).*;
+                        std.debug.print(" {d}", .{n});
+                    },
+                    else => {
+                        const U = std.meta.Int(.unsigned, 8 * sz);
+                        const n = std.mem.bytesAsValue(U, bytes).*;
+                        std.debug.print(" {d}", .{n});
+                    },
+                }
             },
             else => unreachable,
         }
@@ -210,7 +219,7 @@ fn dumpNext(state: State) void {
     std.debug.print("\n", .{});
 }
 
-/// execute code exported from a shared object
+/// execute code exported from a module
 pub fn exec(
     env: *Env,
     mod: *const Module,
@@ -231,7 +240,7 @@ pub fn exec(
     // execute ops until halted
     while (state.pc < state.code.len) {
         if (in_debug) {
-            dumpNext(state);
+            dumpNext(env, state);
         }
 
         const byte = state.readByte();
@@ -317,6 +326,11 @@ const monomorphic_subs = struct {
         try env.push([8]u8, return_value);
     }
 
+    fn label(env: *Env, state: *State) Error!void {
+        const dest = state.readValue(u32);
+        try env.push(u32, dest);
+    }
+
     fn drop(env: *Env, _: *State) Error!void {
         _ = try env.pop(u8);
     }
@@ -343,6 +357,11 @@ const monomorphic_subs = struct {
     fn jump(_: *Env, state: *State) Error!void {
         const dest = state.readValue(u32);
         state.pc = dest;
+    }
+
+    fn call(env: *Env, state: *State) Error!void {
+        const dest = try env.pop(u32);
+        try env.call(state, dest);
     }
 };
 
