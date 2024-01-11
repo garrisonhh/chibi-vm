@@ -2,12 +2,13 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const in_debug = @import("builtin").mode == .Debug;
 const ops = @import("ops.zig");
 const ByteOp = ops.ByteOp;
 const Opcode = ops.Opcode;
 const Width = ops.Width;
 const objects = @import("objects.zig");
-const SharedObject = objects.SharedObject;
+const Module = objects.Module;
 
 // utils =======================================================================
 
@@ -178,27 +179,60 @@ pub const ExecError = Allocator.Error || Error || error{
     InvalidByteOp,
 };
 
+/// writes the next op to stderr for debugging
+fn dumpNext(state: State) void {
+    const code = state.code[state.pc..];
+    const byteop: ByteOp = @bitCast(code[0]);
+    const extra = code[1 .. 1 + byteop.extraBytes()];
+
+    std.debug.print("{d:>6} | {s}", .{ state.pc, @tagName(byteop.opcode) });
+    if (byteop.opcode.meta().sized) {
+        std.debug.print(" {s}", .{@tagName(byteop.width)});
+    }
+
+    if (extra.len > 0) {
+        switch (extra.len) {
+            0 => {},
+            inline 1, 2, 4, 8 => |sz| {
+                const bytes: *const [sz]u8 = @ptrCast(extra.ptr);
+
+                const U = std.meta.Int(.unsigned, 8 * sz);
+                const I = std.meta.Int(.signed, 8 * sz);
+                const u = std.mem.bytesAsValue(U, bytes).*;
+                const i = std.mem.bytesAsValue(I, bytes).*;
+
+                std.debug.print(" (u: {d} i: {d})", .{ u, i });
+            },
+            else => unreachable,
+        }
+    }
+
+    std.debug.print("\n", .{});
+}
+
 /// execute code exported from a shared object
 pub fn exec(
     env: *Env,
-    so: *const SharedObject,
+    mod: *const Module,
     name: []const u8,
 ) ExecError!void {
-    const start = so.exports.get(name) orelse {
+    const start = mod.exports.get(name) orelse {
         return ExecError.NoSuchFunction;
     };
 
     // start in a halted state so that returning from the first function will
     // halt execution
     var state = State{
-        .code = so.code,
-        .pc = so.code.len,
+        .code = mod.code,
+        .pc = mod.code.len,
     };
     try env.call(&state, start);
 
     // execute ops until halted
     while (state.pc < state.code.len) {
-        std.debug.print("EXEC {}\n", .{ops.firstOp(state.code[state.pc..])});
+        if (in_debug) {
+            dumpNext(state);
+        }
 
         const byte = state.readByte();
         const sub = byte_subs[byte] orelse {
@@ -207,6 +241,9 @@ pub fn exec(
 
         try sub(env, &state);
     }
+
+    // there should be one value remaining
+    std.debug.assert(env.stack.used() == 8);
 }
 
 // opcode functions ============================================================
@@ -302,6 +339,11 @@ const monomorphic_subs = struct {
         const dst = try env.peek([*]u8);
         @memcpy(dst[0..nbytes], src[0..nbytes]);
     }
+
+    fn jump(_: *Env, state: *State) Error!void {
+        const dest = state.readValue(u32);
+        state.pc = dest;
+    }
 };
 
 /// subroutines for opcodes which are generic over width
@@ -362,6 +404,22 @@ fn generic_subs(comptime W: Width) type {
             const data = try env.pop(U);
             const start = try env.pop([*]U);
             start[offset] = data;
+        }
+
+        fn jz(env: *Env, state: *State) Error!void {
+            const value = try env.pop(U);
+            const dest = state.readValue(u32);
+            if (value == 0) {
+                state.pc = dest;
+            }
+        }
+
+        fn jnz(env: *Env, state: *State) Error!void {
+            const value = try env.pop(U);
+            const dest = state.readValue(u32);
+            if (value != 0) {
+                state.pc = dest;
+            }
         }
     };
 }

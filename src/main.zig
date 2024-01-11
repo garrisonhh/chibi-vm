@@ -15,7 +15,7 @@ comptime {
 fn compile(
     backing_ally: Allocator,
     sources: []const Source,
-) !vm.SharedObject {
+) !vm.Module {
     var arena = std.heap.ArenaAllocator.init(backing_ally);
     defer arena.deinit();
     const ally = arena.allocator();
@@ -49,28 +49,28 @@ pub fn main() !void {
             .name = "test_file",
             .contents =
             \\int f(int a) {
-            \\  int b = a * 2 + 3;
-            \\  return b;
+            \\    if (a) {
+            \\        return 2;
+            \\    } else {
+            \\        return 4;
+            \\    }
             \\}
             \\
             ,
         },
     };
 
-    var so = try compile(ally, &sources);
-    defer so.deinit(ally);
-
-    std.debug.print("[bytecode]\n", .{});
-    var iter = vm.iterateBytecode(so.code);
-    while (iter.next()) |op| {
-        std.debug.print("{}\n", .{op});
-    }
-    std.debug.print("\n", .{});
+    var mod = try compile(ally, &sources);
+    defer mod.deinit(ally);
 
     var env = try vm.Env.init(ally, .{});
     defer env.deinit(ally);
 
-    try env.push(i32, 42);
-    try env.exec(&so, "f");
+    try env.push(i32, 0);
+    try env.exec(&mod, "f");
+    std.debug.print("output: {}\n", .{try env.pop(i32)});
+
+    try env.push(i32, 1);
+    try env.exec(&mod, "f");
     std.debug.print("output: {}\n", .{try env.pop(i32)});
 }

@@ -170,6 +170,24 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
 
             // all other casts are noops
         },
+        .@"if" => |meta| {
+            const else_branch = try b.backref();
+            const end = try b.backref();
+
+            try lowerNode(b, ctx, meta.cond);
+            try b.op(.{ .jz = .{
+                .width = Width.fromBytesFit(meta.cond.ty.?.size).?,
+                .dest = else_branch,
+            } });
+
+            try lowerNode(b, ctx, meta.then);
+            try b.op(.{ .jump = end });
+
+            try b.resolve(else_branch);
+            try lowerNode(b, ctx, meta.@"else");
+
+            try b.resolve(end);
+        },
         .num => |num| {
             const constant: Op.Constant = switch (node.ty.?.data) {
                 inline else => |_, tag| c: {

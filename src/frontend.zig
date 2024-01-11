@@ -218,6 +218,12 @@ pub const Type = struct {
 pub const Node = struct {
     const Self = @This();
 
+    pub const If = struct {
+        cond: *Node,
+        then: *Node,
+        @"else": *Node,
+    };
+
     pub const Number = union(enum) {
         int: u64,
         float: f64,
@@ -251,7 +257,7 @@ pub const Node = struct {
         logand,
         logor,
         @"return": *Node,
-        @"if",
+        @"if": If,
         @"for",
         do,
         @"switch",
@@ -320,6 +326,13 @@ pub const Node = struct {
             .block => Data{
                 .block = try fromChibiSlice(ally, node.body),
             },
+            .@"if" => Data{
+                .@"if" = .{
+                    .cond = try fromChibiAlloc(ally, node.cond.?),
+                    .then = try fromChibiAlloc(ally, node.then.?),
+                    .@"else" = try fromChibiAlloc(ally, node.els.?),
+                },
+            },
             .num => Data{
                 .num = switch (ty.?.data) {
                     .char, .short, .int, .long => .{ .int = node.val },
@@ -369,6 +382,11 @@ pub const Node = struct {
         switch (self.data) {
             inline else => |meta| switch (@TypeOf(meta)) {
                 void => {},
+                If => {
+                    meta.cond.dumpIndented(level + 1);
+                    meta.then.dumpIndented(level + 1);
+                    meta.@"else".dumpIndented(level + 1);
+                },
                 Number => {
                     for (0..(level + 1) * 2) |_| std.debug.print(" ", .{});
                     switch (meta) {
@@ -402,7 +420,6 @@ pub const Object = struct {
         data: ?[*]const u8,
     };
     pub const FuncDef = struct {
-        stack_size: usize,
         params: []const Self,
         locals: []const Self,
         body: []const Node,
@@ -439,7 +456,6 @@ pub const Object = struct {
                     const body = try Node.fromChibiSlice(ally, obj.body);
 
                     break :data Data{ .func_def = .{
-                        .stack_size = @intCast(obj.stack_size),
                         .params = params,
                         .locals = locals,
                         .body = body,
@@ -509,7 +525,7 @@ pub const Object = struct {
                 }
 
                 for (0..level * 2) |_| std.debug.print(" ", .{});
-                std.debug.print("locals ({} stack bytes):\n", .{fd.stack_size});
+                std.debug.print("locals:\n", .{});
 
                 for (fd.locals) |local| {
                     local.dumpIndented(level + 1);
@@ -529,6 +545,7 @@ pub const Object = struct {
 
     fn dump(self: Self) void {
         self.dumpIndented(0);
+        std.debug.print("\n", .{});
     }
 };
 

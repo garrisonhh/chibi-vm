@@ -1,4 +1,7 @@
 const std = @import("std");
+const in_debug = @import("builtin").mode == .Debug;
+const objects = @import("objects.zig");
+const Label = objects.Builder.Label;
 
 pub const Opcode = enum(u6) {
     halt = 0,
@@ -57,6 +60,13 @@ pub const Opcode = enum(u6) {
     /// reads u32 length, pops `src` ptr, peeks `dst` ptr and copies
     copy,
 
+    /// reads u32, and set program counter to the value
+    jump,
+    /// reads u32, pops sized value, and if it is zero then jump
+    jz,
+    /// reads u32, pops sized value, and if it's not zero then jump
+    jnz,
+
     pub const Meta = struct {
         /// popped values
         inputs: usize,
@@ -69,21 +79,15 @@ pub const Opcode = enum(u6) {
     /// get metadata about opcode execution. this is useful for verification and
     /// other tasks involving processing raw bytecode.
     pub fn meta(opcode: Opcode) Meta {
-        const MetaTuple = struct {
-            @"0": usize,
-            @"1": usize,
-            @"2": bool,
-        };
-
-        const tup: MetaTuple = switch (opcode) {
-            .halt => .{ 0, 0, false },
-            .enter => .{ 0, 0, false },
-            .ret => .{ 1, 0, false },
-            .constant => .{ 0, 1, true },
-            .drop => .{ 1, 0, false },
-            .local => .{ 0, 1, false },
-            .load => .{ 1, 1, true },
-            .store => .{ 2, 0, true },
+        return switch (opcode) {
+            .halt => .{ .inputs = 0, .outputs = 0, .sized = false },
+            .enter => .{ .inputs = 0, .outputs = 0, .sized = false },
+            .ret => .{ .inputs = 1, .outputs = 0, .sized = false },
+            .constant => .{ .inputs = 0, .outputs = 1, .sized = true },
+            .drop => .{ .inputs = 1, .outputs = 0, .sized = false },
+            .local => .{ .inputs = 0, .outputs = 1, .sized = false },
+            .load => .{ .inputs = 1, .outputs = 1, .sized = true },
+            .store => .{ .inputs = 2, .outputs = 0, .sized = true },
 
             .add,
             .sub,
@@ -92,21 +96,18 @@ pub const Opcode = enum(u6) {
             .divu,
             .divi,
             .mod,
-            => .{ 2, 1, true },
-            .neg => .{ 1, 1, true },
+            => .{ .inputs = 2, .outputs = 1, .sized = true },
+            .neg => .{ .inputs = 1, .outputs = 1, .sized = true },
 
             .sign_extend,
             .sign_narrow,
-            => .{ 1, 1, true },
+            => .{ .inputs = 1, .outputs = 1, .sized = true },
 
-            .zero => .{ 1, 1, false },
-            .copy => .{ 2, 1, false },
-        };
+            .zero => .{ .inputs = 1, .outputs = 1, .sized = false },
+            .copy => .{ .inputs = 2, .outputs = 1, .sized = false },
 
-        return Meta{
-            .inputs = tup.@"0",
-            .outputs = tup.@"1",
-            .sized = tup.@"2",
+            .jump => .{ .inputs = 0, .outputs = 0, .sized = false },
+            .jz, .jnz => .{ .inputs = 1, .outputs = 0, .sized = true },
         };
     }
 };
@@ -132,6 +133,8 @@ pub const Width = enum(u2) {
         };
     }
 
+    /// finds minimum width wide enough for the number of bytes rather than an
+    /// exact match in byte count
     pub fn fromBytesFit(nbytes: usize) ?Width {
         return switch (nbytes) {
             1 => .byte,
@@ -145,6 +148,7 @@ pub const Width = enum(u2) {
 
 /// the bytecode form of ops
 pub const ByteOp = packed struct(u8) {
+    /// this should always be `byte` for ops which are not sized
     width: Width = .byte,
     opcode: Opcode,
 
@@ -153,7 +157,19 @@ pub const ByteOp = packed struct(u8) {
     /// extra bytes based on their width*
     pub fn extraBytes(bo: ByteOp) usize {
         return switch (bo.opcode) {
-            .constant => bo.width.bytes(),
+            .halt,
+            .drop,
+            .add,
+            .sub,
+            .mulu,
+            .muli,
+            .divu,
+            .divi,
+            .mod,
+            .neg,
+            .sign_extend,
+            .sign_narrow,
+            => 0,
 
             .ret => 1,
             .enter,
@@ -161,9 +177,14 @@ pub const ByteOp = packed struct(u8) {
             .load,
             .store,
             => 2,
-            .zero, .copy => 4,
+            .zero,
+            .copy,
+            .jump,
+            .jz,
+            .jnz,
+            => 4,
 
-            else => 0,
+            .constant => bo.width.bytes(),
         };
     }
 };
@@ -181,6 +202,11 @@ pub const Op = union(Opcode) {
         width: Width,
         /// offset from the pointer
         offset: u16,
+    };
+
+    pub const CondJmp = struct {
+        width: Width,
+        dest: Label,
     };
 
     halt,
@@ -208,6 +234,9 @@ pub const Op = union(Opcode) {
     zero: u32,
     /// data is number of bytes to copy
     copy: u32,
+    jump: Label,
+    jz: CondJmp,
+    jnz: CondJmp,
 
     pub fn format(
         op: Op,
@@ -245,98 +274,15 @@ pub const Op = union(Opcode) {
                         "{s} {d}",
                         .{ @tagName(data.width), data.offset },
                     ),
+                    Label => try writer.print("{}", .{data}),
+                    CondJmp => try writer.print(
+                        "{s} {}",
+                        .{ @tagName(data.width), data.dest },
+                    ),
 
                     else => unreachable,
                 }
             },
         }
-    }
-};
-
-// utilities ===================================================================
-
-fn sliceTo(comptime T: type, slice: []const u8) T {
-    std.debug.assert(slice.len == @sizeOf(T));
-    const ptr: *const [@sizeOf(T)]u8 = @ptrCast(slice.ptr);
-    return @bitCast(ptr.*);
-}
-
-/// reads the first op from the bytecode. if you provide an nbytes pointer, it
-/// will write the length read to it.
-fn firstOpAdvanced(code: []const u8, nbytes: ?*usize) Op {
-    const byteop: ByteOp = @bitCast(code[0]);
-    const extra_bytes = byteop.extraBytes();
-    const extra = code[1..1 + extra_bytes];
-
-    if (nbytes) |out| {
-        out.* = 1 + extra_bytes;
-    }
-
-    return switch (byteop.opcode) {
-        // void
-        inline .halt, .drop => |tag| @unionInit(Op, @tagName(tag), {}),
-
-        // width
-        inline .add,
-        .sub,
-        .mulu,
-        .muli,
-        .divu,
-        .divi,
-        .mod,
-        .neg,
-        .sign_extend,
-        .sign_narrow,
-        => |tag| @unionInit(Op, @tagName(tag), byteop.width),
-
-        // some int or raw value
-        inline .enter, .ret, .local, .zero, .copy => |tag| raw: {
-            const name = @tagName(tag);
-
-            var op = @unionInit(Op, name, undefined);
-            const T = @TypeOf(@field(op, name));
-            @field(op, name) = sliceTo(T, extra);
-
-            break :raw op;
-        },
-
-        // special
-        .constant => Op{
-            .constant = switch (byteop.width) {
-                inline else => |w| @unionInit(
-                    Op.Constant,
-                    @tagName(w),
-                    sliceTo([w.bytes()]u8, extra),
-                ),
-            },
-        },
-        inline .load, .store => |tag| @unionInit(Op, @tagName(tag), Op.Address{
-            .width = byteop.width,
-            .offset = sliceTo(u16, extra),
-        }),
-    };
-}
-
-pub fn firstOp(code: []const u8) Op {
-    return firstOpAdvanced(code, null);
-}
-
-pub fn iterateBytecode(code: []const u8) BytecodeIterator {
-    return .{ .code = code };
-}
-
-pub const BytecodeIterator = struct {
-    code: []const u8,
-
-    pub fn next(iter: *BytecodeIterator) ?Op {
-        if (iter.code.len == 0) {
-            return null;
-        }
-
-        var nbytes: usize = undefined;
-        const op = firstOpAdvanced(iter.code, &nbytes);
-        iter.code = iter.code[nbytes..];
-
-        return op;
     }
 };

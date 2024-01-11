@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const in_debug = @import("builtin").mode == .Debug;
 const ops = @import("ops.zig");
 const Op = ops.Op;
 const ByteOp = ops.ByteOp;
@@ -10,27 +11,19 @@ const Export = struct {
     offset: usize,
 };
 
-const Import = struct {
-    name: []const u8,
-    /// where the address should be written
-    offset: usize,
-};
-
 /// a bytecode translation unit
 pub const Object = struct {
     code: []const u8,
     exports: []const Export,
-    imports: []const Import,
 
     pub fn deinit(self: Object, ally: Allocator) void {
         ally.free(self.code);
         ally.free(self.exports);
-        ally.free(self.imports);
     }
 };
 
 /// fully linked and executable bytecode
-pub const SharedObject = struct {
+pub const Module = struct {
     pub const Exports = std.StringHashMapUnmanaged(usize);
 
     code: []const u8,
@@ -38,7 +31,7 @@ pub const SharedObject = struct {
     exports: Exports,
 
     // TODO I hate that this has to be mutable
-    pub fn deinit(self: *SharedObject, ally: Allocator) void {
+    pub fn deinit(self: *Module, ally: Allocator) void {
         ally.free(self.code);
 
         var keys = self.exports.keyIterator();
@@ -51,24 +44,78 @@ pub const SharedObject = struct {
 pub const Builder = struct {
     const Self = @This();
 
+    pub const Label = struct {
+        index: usize,
+
+        pub fn format(
+            self: Label,
+            comptime _: []const u8,
+            _: std.fmt.FormatOptions,
+            writer: anytype,
+        ) @TypeOf(writer).Error!void {
+            try writer.print("@{d}", .{self.index});
+        }
+    };
+
+    const Backrefs = std.ArrayListUnmanaged(usize);
+
     ally: Allocator,
     code: std.ArrayListUnmanaged(u8) = .{},
     exports: std.ArrayListUnmanaged(Export) = .{},
-    imports: std.ArrayListUnmanaged(Import) = .{},
+
+    /// maps label (as index) -> code index
+    labels: std.ArrayListUnmanaged(?u32) = .{},
+    /// maps label -> indices of u32s to write
+    backrefs: std.AutoHashMapUnmanaged(Label, Backrefs) = .{},
 
     pub fn init(ally: Allocator) Self {
         return Self{ .ally = ally };
     }
 
-    /// also deinits builder
+    pub fn deinit(self: *Self) void {
+        var ally = self.ally;
+
+        self.code.deinit(ally);
+        self.exports.deinit(ally);
+
+        self.labels.deinit(ally);
+        var backref_lists = self.backrefs.valueIterator();
+        while (backref_lists.next()) |list| {
+            list.deinit(ally);
+        }
+    }
+
     pub fn build(self: *Self) Allocator.Error!Object {
         const ally = self.ally;
-        defer self.* = undefined;
+
+        self.resolveBackrefs();
+
         return Object{
             .code = try self.code.toOwnedSlice(ally),
             .exports = try self.exports.toOwnedSlice(ally),
-            .imports = try self.imports.toOwnedSlice(ally),
         };
+    }
+
+    fn resolveBackrefs(self: *const Self) void {
+        var backrefs = self.backrefs.iterator();
+        while (backrefs.next()) |entry| {
+            const lbl = entry.key_ptr.*;
+            const backref_list = entry.value_ptr.items;
+
+            const dest = self.labels.items[lbl.index] orelse {
+                if (in_debug) {
+                    std.debug.panic("unresolved label: {}", .{lbl});
+                } else {
+                    unreachable;
+                }
+            };
+            const dest_bytes = std.mem.asBytes(&dest);
+
+            for (backref_list) |offset| {
+                const reserved = self.code.items[offset .. offset + @sizeOf(u32)];
+                @memcpy(reserved, dest_bytes);
+            }
+        }
     }
 
     /// exports a label from the current location in code
@@ -80,26 +127,39 @@ pub const Builder = struct {
         });
     }
 
-    /// writes an undefined usize and marks down what label to write to these
-    /// bytes. this should really only be used for
-    /// *name must outlive builder + object*
-    fn import(self: *Self, name: []const u8) Allocator.Error!void {
+    /// create an unresolved (future) label
+    pub fn backref(self: *Self) Allocator.Error!Label {
         const ally = self.ally;
 
-        const offset = self.code.items.len;
-        try self.code.appendNTimes(ally, undefined, @sizeOf(usize));
-        try self.imports.append(ally, Import{
-            .name = name,
-            .offset = offset,
-        });
+        const lbl = Label{ .index = self.labels.items.len };
+        try self.labels.append(ally, null);
+        try self.backrefs.put(ally, lbl, .{});
+
+        return lbl;
     }
 
+    /// resolve a backref
+    pub fn resolve(self: *Self, lbl: Label) Allocator.Error!void {
+        if (in_debug and self.labels.items[lbl.index] != null) {
+            std.debug.panic("tried to resolve lbl twice: {}", .{lbl});
+        }
+
+        self.labels.items[lbl.index] = @intCast(self.code.items.len);
+    }
+
+    /// create and resolve a label
+    pub fn label(self: *Self) Allocator.Error!Label {
+        const lbl = try self.backref();
+        try self.resolve(lbl);
+        return lbl;
+    }
+
+    /// compile an op and add it to the
     pub fn op(self: *Self, o: Op) Allocator.Error!void {
         const ally = self.ally;
 
-        // create byte op from op and append
-        var bo = ByteOp{ .opcode = o };
-        switch (o) {
+        // construct byteop
+        const width: ?ops.Width = switch (o) {
             .halt,
             .enter,
             .ret,
@@ -107,14 +167,8 @@ pub const Builder = struct {
             .local,
             .zero,
             .copy,
-            => {},
-
-            .constant => |c| {
-                bo.width = c;
-            },
-            .load, .store => |addr| {
-                bo.width = addr.width;
-            },
+            .jump,
+            => null,
 
             .add,
             .sub,
@@ -126,37 +180,62 @@ pub const Builder = struct {
             .neg,
             .sign_extend,
             .sign_narrow,
-            => |w| {
-                bo.width = w;
-            },
-        }
-        try self.code.append(ally, @bitCast(bo));
+            => |w| w,
 
-        // add any other data
+            .constant => |c| c,
+            .load, .store => |addr| addr.width,
+            .jz, .jnz => |cj| cj.width,
+        };
+
+        const byteop = ByteOp{
+            .width = width orelse .byte,
+            .opcode = o,
+        };
+
+        try self.code.append(ally, @bitCast(byteop));
+
+        // add extra bytes
+        var extra = std.BoundedArray(u8, 8){};
         switch (o) {
             .ret => |num_params| {
-                try self.code.append(ally, num_params);
+                extra.appendAssumeCapacity(num_params);
             },
             .enter => |stack_size| {
-                try self.code.appendSlice(ally, std.mem.asBytes(&stack_size));
+                extra.appendSliceAssumeCapacity(std.mem.asBytes(&stack_size));
             },
             .constant => |data| switch (data) {
                 inline else => |bytes| {
-                    try self.code.appendSlice(ally, &bytes);
+                    extra.appendSliceAssumeCapacity(&bytes);
                 },
             },
             .local => |offset| {
-                try self.code.appendSlice(ally, std.mem.asBytes(&offset));
+                extra.appendSliceAssumeCapacity(std.mem.asBytes(&offset));
             },
             .load, .store => |addr| {
-                try self.code.appendSlice(ally, std.mem.asBytes(&addr.offset));
+                extra.appendSliceAssumeCapacity(std.mem.asBytes(&addr.offset));
             },
             .zero, .copy => |length| {
-                try self.code.appendSlice(ally, std.mem.asBytes(&length));
+                extra.appendSliceAssumeCapacity(std.mem.asBytes(&length));
+            },
+            inline .jump, .jz, .jnz => |data, tag| {
+                const lbl: Label = switch (comptime tag) {
+                    .jump => data,
+                    .jz, .jnz => data.dest,
+                    else => unreachable,
+                };
+
+                // label
+                const backref_list = self.backrefs.getPtr(lbl).?;
+                try backref_list.append(ally, self.code.items.len);
+
+                extra.appendSliceAssumeCapacity(&.{ 0xDE, 0xAD, 0xBE, 0xEF });
             },
 
             else => {},
         }
+
+        std.debug.assert(extra.len == byteop.extraBytes());
+        try self.code.appendSlice(ally, extra.slice());
     }
 };
 
@@ -164,19 +243,18 @@ pub const Builder = struct {
 pub fn link(
     ally: Allocator,
     objects: []const Object,
-) Allocator.Error!SharedObject {
+) Allocator.Error!Module {
     std.debug.assert(objects.len == 1);
-    std.debug.assert(objects[0].imports.len == 0);
 
     // TODO actually link multiple objects
 
     const object = objects[0];
-    var exports = SharedObject.Exports{};
+    var exports = Module.Exports{};
     for (object.exports) |e| {
         try exports.put(ally, try ally.dupe(u8, e.name), e.offset);
     }
 
-    return SharedObject{
+    return Module{
         .code = try ally.dupe(u8, object.code),
         .exports = exports,
     };
