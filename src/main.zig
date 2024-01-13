@@ -48,12 +48,9 @@ pub fn main() !void {
         .{
             .name = "test_file",
             .contents =
-            \\int bar(int a, int b) {
-            \\    return a + b;
-            \\}
-            \\
-            \\int foo(int a, int b) {
-            \\    return bar(a, b) * 2;
+            \\int foo(int x) {
+            \\  if (x - 4) return 1;
+            \\  return 0;
             \\}
             \\
             ,
@@ -66,13 +63,9 @@ pub fn main() !void {
     var env = try vm.Env.init(ally, .{});
     defer env.deinit(ally);
 
-    try env.push(i32, 2);
-    try env.push(i32, 3);
-    try env.exec(&mod, "foo");
-    std.debug.print("output: {}\n", .{try env.pop(i32)});
-
-    try env.push(i32, 4);
-    try env.push(i32, 5);
-    try env.exec(&mod, "foo");
-    std.debug.print("output: {}\n", .{try env.pop(i32)});
+    for (0..10) |n| {
+        try env.push(i32, @as(i32, @intCast(n)));
+        try env.exec(&mod, "foo");
+        std.debug.print("output: {}\n", .{try env.pop(i32)});
+    }
 }

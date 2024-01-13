@@ -218,10 +218,15 @@ pub const Type = struct {
 pub const Node = struct {
     const Self = @This();
 
+    pub const Var = struct {
+        name: []const u8,
+        ty: *Type,
+    };
+
     pub const If = struct {
         cond: *Node,
         then: *Node,
-        @"else": *Node,
+        @"else": ?*Node,
     };
 
     pub const Number = union(enum) {
@@ -275,11 +280,11 @@ pub const Node = struct {
         funcall: Funcall,
         expr_stmt: *Node,
         stmt_expr: *Node,
-        @"var": *Object,
+        @"var": Var,
         vla_ptr,
         num: Number,
         cast: *Node,
-        memzero: *Object,
+        memzero: Var,
         @"asm",
         cas,
         exch,
@@ -335,7 +340,9 @@ pub const Node = struct {
                 .@"if" = .{
                     .cond = try fromChibiAlloc(ally, node.cond.?),
                     .then = try fromChibiAlloc(ally, node.then.?),
-                    .@"else" = try fromChibiAlloc(ally, node.els.?),
+                    .@"else" = if (node.els) |els| els: {
+                        break :els try fromChibiAlloc(ally, els);
+                    } else null,
                 },
             },
             .num => Data{
@@ -345,11 +352,10 @@ pub const Node = struct {
                     else => unreachable,
                 },
             },
-            inline .@"var", .memzero => |tag| @unionInit(
-                Data,
-                @tagName(tag),
-                try Object.fromChibiAlloc(ally, node.@"var".?),
-            ),
+            inline .@"var", .memzero => |tag| @unionInit(Data, @tagName(tag), .{
+                .ty = try Type.fromChibiAlloc(ally, node.@"var".?.ty),
+                .name = cStrSlice(node.@"var".?.name),
+            }),
             .funcall => Data{ .funcall = .{
                 .func = try fromChibiAlloc(ally, node.lhs.?),
                 .args = try fromChibiSlice(ally, node.args),
@@ -391,10 +397,16 @@ pub const Node = struct {
         switch (self.data) {
             inline else => |meta| switch (@TypeOf(meta)) {
                 void => {},
+                Var => {
+                    for (0..(level + 1) * 2) |_| std.debug.print(" ", .{});
+                    std.debug.print("{s}: {}", .{meta.name, meta.ty});
+                },
                 If => {
                     meta.cond.dumpIndented(level + 1);
                     meta.then.dumpIndented(level + 1);
-                    meta.@"else".dumpIndented(level + 1);
+                    if (meta.@"else") |@"else"| {
+                        @"else".dumpIndented(level + 1);
+                    }
                 },
                 Funcall => {
                     meta.func.dumpIndented(level + 1);

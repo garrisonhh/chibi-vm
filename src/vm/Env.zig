@@ -239,6 +239,8 @@ pub fn exec(
 
     // execute ops until halted
     while (state.pc < state.code.len) {
+        if (env.stack.used() >= 64) break;
+
         if (in_debug) {
             dumpNext(env, state);
         }

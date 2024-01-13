@@ -24,7 +24,7 @@ pub const Opcode = enum(u6) {
     /// remove a stack value
     drop,
 
-    // binary twos-complement 64-bit math
+    // twos-complement math
     // some need differentiating between signed and unsigned, some don't
     add,
     sub,
@@ -33,6 +33,18 @@ pub const Opcode = enum(u6) {
     divu,
     divi,
     mod,
+
+    // logic
+    @"or",
+    @"and",
+    not,
+    eq,
+
+    // bitwise logic
+    bitor,
+    bitand,
+    bitnot,
+    bitxor,
 
     // unary math
     neg,

@@ -34,13 +34,13 @@ fn unimplemented(comptime fmt: []const u8, args: anytype) !void {
     return error.Unimplemented;
 }
 
-fn lowerObjAddr(b: *Builder, ctx: *const Context, obj: *const AstObject) !void {
-    if (ctx.locals.get(obj.name)) |local| {
+fn lowerVarAddr(b: *Builder, ctx: *const Context, v: Node.Var) !void {
+    if (ctx.locals.get(v.name)) |local| {
         try b.op(.{ .local = local.offset });
     } else {
-        const lbl = b.getGlobal(obj.name) orelse {
+        const lbl = b.getGlobal(v.name) orelse {
             if (in_debug) {
-                std.debug.panic("unknown object name: {s}", .{obj.name});
+                std.debug.panic("unknown object name: {s}", .{v.name});
             }
             unreachable;
         };
@@ -52,7 +52,7 @@ fn lowerObjAddr(b: *Builder, ctx: *const Context, obj: *const AstObject) !void {
 fn lowerAddr(b: *Builder, ctx: *const Context, node: *const Node) !void {
     switch (node.data) {
         .@"var" => |obj| {
-            try lowerObjAddr(b, ctx, obj);
+            try lowerVarAddr(b, ctx, obj);
         },
 
         else => {
@@ -183,22 +183,35 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
             // all other casts are noops
         },
         .@"if" => |meta| {
-            const else_branch = try b.backref();
-            const end = try b.backref();
+            if (meta.@"else") |@"else"| {
+                const else_branch = try b.backref();
+                const end = try b.backref();
 
-            try lowerNode(b, ctx, meta.cond);
-            try b.op(.{ .jz = .{
-                .width = Width.fromBytesFit(meta.cond.ty.?.size).?,
-                .dest = else_branch,
-            } });
+                try lowerNode(b, ctx, meta.cond);
+                try b.op(.{ .jz = .{
+                    .width = Width.fromBytesFit(meta.cond.ty.?.size).?,
+                    .dest = else_branch,
+                } });
 
-            try lowerNode(b, ctx, meta.then);
-            try b.op(.{ .jump = end });
+                try lowerNode(b, ctx, meta.then);
+                try b.op(.{ .jump = end });
 
-            try b.resolve(else_branch);
-            try lowerNode(b, ctx, meta.@"else");
+                try b.resolve(else_branch);
+                try lowerNode(b, ctx, @"else");
 
-            try b.resolve(end);
+                try b.resolve(end);
+            } else {
+                const end = try b.backref();
+
+                try lowerNode(b, ctx, meta.cond);
+                try b.op(.{ .jz = .{
+                    .width = Width.fromBytesFit(meta.cond.ty.?.size).?,
+                    .dest = end,
+                } });
+
+                try lowerNode(b, ctx, meta.then);
+                try b.resolve(end);
+            }
         },
         .funcall => |fc| {
             for (fc.args) |*arg| {
