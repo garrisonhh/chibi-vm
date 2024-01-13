@@ -221,6 +221,15 @@ pub const Builder = struct {
             .divu,
             .divi,
             .mod,
+            .@"and",
+            .@"or",
+            .not,
+            .bitand,
+            .bitor,
+            .bitcom,
+            .bitxor,
+            .eq,
+            .ne,
             .neg,
             .sign_extend,
             .sign_narrow,
@@ -291,6 +300,7 @@ pub fn link(
     std.debug.assert(objects.len == 1);
 
     // TODO actually link multiple objects
+    // TODO objects importing from each other
 
     const object = objects[0];
     var exports = Module.Exports{};
