@@ -49,8 +49,13 @@ pub fn main() !void {
             .name = "test_file",
             .contents =
             \\int foo(int x) {
-            \\  if (x - 4) return 1;
-            \\  return 0;
+            \\  if (x == 0) {
+            \\    return 1;
+            \\  } else if (x == 1) {
+            \\    return 1;
+            \\  }
+            \\
+            \\  return foo(x - 1) + foo(x - 2);
             \\}
             \\
             ,
@@ -66,6 +71,6 @@ pub fn main() !void {
     for (0..10) |n| {
         try env.push(i32, @as(i32, @intCast(n)));
         try env.exec(&mod, "foo");
-        std.debug.print("output: {}\n", .{try env.pop(i32)});
+        std.debug.print("{} -> {}\n", .{n, try env.pop(i32)});
     }
 }

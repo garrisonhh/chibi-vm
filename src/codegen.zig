@@ -74,14 +74,7 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
             try lowerNode(b, ctx, args[0]);
             try lowerNode(b, ctx, args[1]);
 
-            // TODO floats
-
-            switch (comptime tag) {
-                .add => try b.op(.{ .add = width }),
-                .sub => try b.op(.{ .sub = width }),
-                .mod => try b.op(.{ .mod = width }),
-                else => unreachable,
-            }
+            try b.op(@unionInit(Op, @tagName(tag), width));
         },
         inline .mul, .div => |args, tag| {
             const ty = node.ty.?;
@@ -114,6 +107,16 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
                 std.debug.assert(ty.isFloat());
                 try unimplemented("mul/div float", .{});
             }
+        },
+        inline .eq, .ne => |args, tag| {
+            const width = Width.fromBytesExact(node.ty.?.size).?;
+
+            try lowerNode(b, ctx, args[0]);
+            try lowerNode(b, ctx, args[1]);
+
+            try b.op(@unionInit(Op, @tagName(tag), width));
+            // in c, conditions return integers
+            try b.op(.{ .extend = .byte });
         },
         inline .deref, .expr_stmt, .@"return" => |child, tag| {
             try lowerNode(b, ctx, child);
@@ -162,11 +165,14 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
             const into = node.ty.?;
             const from = child.ty.?;
 
-            if (into.data == .void) {
-                // value will be ignored
+            if (into.eql(from)) {
+                // no cast required
+            } else if (into.data == .void) {
+                // value will be dropped
             } else if (into.data == .bool) {
                 // bool cast (just compare to zero)
-                return unimplemented("cast to bool", .{});
+                const w = Width.fromBytesFit(from.size).?;
+                try b.op(.{ .eqz = w });
             } else if (from.isInt() and into.isFloat()) {
                 // int to float
                 return unimplemented("int to float", .{});

@@ -219,6 +219,21 @@ fn dumpNext(env: *const Env, state: State) void {
     std.debug.print("\n", .{});
 }
 
+fn dumpStack(env: *const Env) void {
+    const start: [*]const u64 = @ptrCast(env.stack.mem.ptr);
+    const base = (@intFromPtr(env.stack.base) - @intFromPtr(start)) / 8;
+    const top = (@intFromPtr(env.stack.top) - @intFromPtr(start)) / 8;
+
+    std.debug.print("[stack]\n", .{});
+    for (0..top) |i| {
+        if (i == base) {
+            std.debug.print("<base>\n", .{});
+        }
+        std.debug.print("{} | {}\n", .{i, start[i]});
+    }
+    std.debug.print("\n", .{});
+}
+
 /// execute code exported from a module
 pub fn exec(
     env: *Env,
@@ -239,10 +254,9 @@ pub fn exec(
 
     // execute ops until halted
     while (state.pc < state.code.len) {
-        if (env.stack.used() >= 64) break;
-
         if (in_debug) {
-            dumpNext(env, state);
+            // dumpStack(env);
+            // dumpNext(env, state);
         }
 
         const byte = state.readByte();
@@ -387,7 +401,9 @@ fn generic_subs(comptime W: Width) type {
         }
 
         fn sub(env: *Env, _: *State) Error!void {
-            try env.push(U, try env.pop(U) -% try env.pop(U));
+            const b = try env.pop(U);
+            const a = try env.pop(U);
+            try env.push(U, a -% b);
         }
 
         fn mulu(env: *Env, _: *State) Error!void {
@@ -399,19 +415,41 @@ fn generic_subs(comptime W: Width) type {
         }
 
         fn divu(env: *Env, _: *State) Error!void {
-            try env.push(U, try env.pop(U) / try env.pop(U));
+            const b = try env.pop(U);
+            const a = try env.pop(U);
+            try env.push(U, a / b);
         }
 
         fn divi(env: *Env, _: *State) Error!void {
-            try env.push(I, @divFloor(try env.pop(I), try env.pop(I)));
+            const b = try env.pop(I);
+            const a = try env.pop(I);
+            try env.push(I, @divFloor(a, b));
         }
 
         fn mod(env: *Env, _: *State) Error!void {
-            try env.push(U, try env.pop(U) % try env.pop(U));
+            const b = try env.pop(U);
+            const a = try env.pop(U);
+            try env.push(U, a % b);
         }
 
         fn neg(env: *Env, _: *State) Error!void {
             try env.push(I, -try env.pop(I));
+        }
+
+        fn eq(env: *Env, _: *State) Error!void {
+            try env.push(bool, try env.pop(U) == try env.pop(U));
+        }
+
+        fn ne(env: *Env, _: *State) Error!void {
+            try env.push(bool, try env.pop(U) != try env.pop(U));
+        }
+
+        fn eqz(env: *Env, _: *State) Error!void {
+            try env.push(bool, try env.pop(U) != 0);
+        }
+
+        fn extend(env: *Env, _: *State) Error!void {
+            try env.push(u64, try env.pop(U));
         }
 
         fn load(env: *Env, state: *State) Error!void {

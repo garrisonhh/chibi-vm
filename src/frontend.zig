@@ -161,6 +161,30 @@ pub const Type = struct {
         return box;
     }
 
+    pub fn eql(self: Self, other: Self) bool {
+        if (@as(chibi.TypeKind, self.data) != @as(chibi.TypeKind, other.data)) {
+            return false;
+        }
+
+        switch (self.data) {
+            inline else => |this, tag| {
+                const that = @field(other.data, @tagName(tag));
+                return switch (@TypeOf(this, that)) {
+                    void => true,
+                    Int => this.signedness == that.signedness,
+                    Ptr => this.child.eql(that.child.*),
+                    Func => for (this.params, that.params) |p1, p2| {
+                        if (!p1.eql(p2.*)) {
+                            break false;
+                        }
+                    } else this.returns.eql(that.returns.*),
+
+                    else => unreachable,
+                };
+            }
+        }
+    }
+
     pub fn isInt(self: Self) bool {
         return switch (self.data) {
             .char, .short, .int, .long => true,
@@ -250,12 +274,12 @@ pub const Node = struct {
         bitand: [2]*Node,
         bitor: [2]*Node,
         bitxor: [2]*Node,
-        shl,
-        shr,
-        eq,
-        ne,
-        lt,
-        le,
+        shl: [2]*Node,
+        shr: [2]*Node,
+        eq: [2]*Node,
+        ne: [2]*Node,
+        lt: [2]*Node,
+        le: [2]*Node,
         assign: [2]*Node,
         cond,
         comma: [2]*Node,
@@ -321,6 +345,12 @@ pub const Node = struct {
             .bitand,
             .bitor,
             .bitxor,
+            .shr,
+            .shl,
+            .eq,
+            .ne,
+            .lt,
+            .le,
             .assign,
             .comma,
             => |tag| @unionInit(

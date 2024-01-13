@@ -49,8 +49,10 @@ pub const Opcode = enum(u6) {
     // conditional logic
     eq,
     ne,
+    eqz,
 
     // number type manipulation
+    extend, // u8/u16/u32 -> u64
     sign_extend, // i8/i16/i32 -> i64
     sign_narrow, // i64 -> i8/i16/i32
 
@@ -125,7 +127,9 @@ pub const Opcode = enum(u6) {
 
             .not,
             .bitcom,
+            .eqz,
             .neg,
+            .extend,
             .sign_extend,
             .sign_narrow,
             => .{ .inputs = 1, .outputs = 1, .sized = true },
@@ -204,6 +208,8 @@ pub const ByteOp = packed struct(u8) {
             .bitxor,
             .eq,
             .ne,
+            .eqz,
+            .extend,
             .sign_extend,
             .sign_narrow,
             .call,
@@ -273,6 +279,8 @@ pub const Op = union(Opcode) {
     bitxor: Width,
     eq: Width,
     ne: Width,
+    eqz: Width,
+    extend: Width,
     sign_extend: Width,
     sign_narrow: Width,
     /// data is offset from base pointer
