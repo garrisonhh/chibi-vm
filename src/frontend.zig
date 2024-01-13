@@ -253,6 +253,13 @@ pub const Node = struct {
         @"else": ?*Node,
     };
 
+    pub const For = struct {
+        init: ?*Node,
+        cond: ?*Node,
+        iter: ?*Node,
+        body: *Node,
+    };
+
     pub const Number = union(enum) {
         int: u64,
         float: f64,
@@ -292,7 +299,7 @@ pub const Node = struct {
         logor,
         @"return": *Node,
         @"if": If,
-        @"for",
+        @"for": For,
         do,
         @"switch",
         case,
@@ -375,6 +382,14 @@ pub const Node = struct {
                     } else null,
                 },
             },
+            .@"for" => Data{
+                .@"for" = .{
+                    .init = if (node.init) |n| try fromChibiAlloc(ally, n) else null,
+                    .cond = if (node.cond) |n| try fromChibiAlloc(ally, n) else null,
+                    .iter = if (node.inc) |n| try fromChibiAlloc(ally, n) else null,
+                    .body = try fromChibiAlloc(ally, node.then.?),
+                },
+            },
             .num => Data{
                 .num = switch (ty.?.data) {
                     .char, .short, .int, .long => .{ .int = node.val },
@@ -420,8 +435,11 @@ pub const Node = struct {
         return try nodes.toOwnedSlice(ally);
     }
 
-    fn dumpIndented(self: Self, level: u32) void {
+    fn dumpIndented(self: Self, id: ?[]const u8, level: u32) void {
         for (0..level * 2) |_| std.debug.print(" ", .{});
+        if (id) |got| {
+            std.debug.print("{s}: ", .{got});
+        }
         std.debug.print("[{s}] {?}\n", .{ @tagName(self.data), self.ty });
 
         switch (self.data) {
@@ -432,16 +450,28 @@ pub const Node = struct {
                     std.debug.print("{s}: {}\n", .{meta.name, meta.ty});
                 },
                 If => {
-                    meta.cond.dumpIndented(level + 1);
-                    meta.then.dumpIndented(level + 1);
+                    meta.cond.dumpIndented("cond", level + 1);
+                    meta.then.dumpIndented("then", level + 1);
                     if (meta.@"else") |@"else"| {
-                        @"else".dumpIndented(level + 1);
+                        @"else".dumpIndented("else", level + 1);
                     }
                 },
+                For => {
+                    if (meta.init) |child| {
+                        child.dumpIndented("init", level + 1);
+                    }
+                    if (meta.cond) |child| {
+                        child.dumpIndented("cond", level + 1);
+                    }
+                    if (meta.iter) |child| {
+                        child.dumpIndented("iter", level + 1);
+                    }
+                    meta.body.dumpIndented("body", level + 1);
+                },
                 Funcall => {
-                    meta.func.dumpIndented(level + 1);
+                    meta.func.dumpIndented("function", level + 1);
                     for (meta.args) |arg| {
-                        arg.dumpIndented(level + 1);
+                        arg.dumpIndented("argument", level + 1);
                     }
                 },
                 Number => {
@@ -453,11 +483,11 @@ pub const Node = struct {
                     }
                 },
                 *Node, *Object => {
-                    meta.dumpIndented(level + 1);
+                    meta.dumpIndented(null, level + 1);
                 },
                 []const Node, [2]*Node => {
                     for (meta) |child| {
-                        child.dumpIndented(level + 1);
+                        child.dumpIndented(null, level + 1);
                     }
                 },
                 else => unreachable,
@@ -466,7 +496,7 @@ pub const Node = struct {
     }
 
     fn dump(self: Self) void {
-        self.dumpIndented(0);
+        self.dumpIndented(null, 0);
     }
 };
 
@@ -576,25 +606,16 @@ pub const Object = struct {
             },
 
             .func_def => |fd| {
-                for (0..level * 2) |_| std.debug.print(" ", .{});
-                std.debug.print("params:\n", .{});
-
                 for (fd.params) |param| {
                     param.dumpIndented(level + 1);
                 }
-
-                for (0..level * 2) |_| std.debug.print(" ", .{});
-                std.debug.print("locals:\n", .{});
 
                 for (fd.locals) |local| {
                     local.dumpIndented(level + 1);
                 }
 
-                for (0..level * 2) |_| std.debug.print(" ", .{});
-                std.debug.print("body:\n", .{});
-
                 for (fd.body) |node| {
-                    node.dumpIndented(level + 1);
+                    node.dumpIndented("body", level + 1);
                 }
             },
 

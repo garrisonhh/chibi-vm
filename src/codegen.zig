@@ -252,6 +252,33 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
                 try b.resolve(end);
             }
         },
+        .@"for" => |meta| {
+            const start = try b.backref();
+            const end = try b.backref();
+
+            if (meta.init) |n| {
+                try lowerNode(b, ctx, n);
+            }
+
+            try b.resolve(start);
+
+            if (meta.cond) |cond| {
+                try lowerNode(b, ctx, cond);
+                try b.op(.{ .jz = .{
+                    .width = Width.fromBytesFit(cond.ty.?.size).?,
+                    .dest = end,
+                } });
+            }
+
+            try lowerNode(b, ctx, meta.body);
+
+            if (meta.iter) |iter| {
+                try lowerNode(b, ctx, iter);
+            }
+
+            try b.op(.{ .jump = start });
+            try b.resolve(end);
+        },
         .funcall => |fc| {
             for (fc.args) |*arg| {
                 try lowerNode(b, ctx, arg);

@@ -59,10 +59,9 @@ pub fn main() !void {
             \\}
             \\
             \\int strlen(const char *str) {
-            \\  if (*str) {
-            \\    return 1 + strlen(str + 1);
-            \\  }
-            \\  return 0;
+            \\  const char *trav;
+            \\  for (trav = str; *trav; trav = trav + 1);
+            \\  return trav - str;
             \\}
             \\
         },
@@ -74,7 +73,7 @@ pub fn main() !void {
     var env = try vm.Env.init(ally, .{});
     defer env.deinit(ally);
 
-    for (0..10) |n| {
+    for (0..15) |n| {
         try env.push(i32, @as(i32, @intCast(n)));
         try env.exec(&mod, "fib");
         std.debug.print("fib({}) = {}\n", .{n, try env.pop(i32)});
