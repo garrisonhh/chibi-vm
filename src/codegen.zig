@@ -34,6 +34,17 @@ fn unimplemented(comptime fmt: []const u8, args: anytype) !void {
     return error.Unimplemented;
 }
 
+// helpers =====================================================================
+
+fn getIntSignedness(t: Type) std.builtin.Signedness {
+    return switch (t.data) {
+        .char, .short, .int, .long => |meta| meta.signedness,
+        else => unreachable,
+    };
+}
+
+// lowering ====================================================================
+
 fn lowerVarAddr(b: *Builder, ctx: *const Context, v: Node.Var) !void {
     if (ctx.locals.get(v.name)) |local| {
         try b.op(.{ .local = local.offset });
@@ -182,8 +193,30 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
             } else if (from.size != into.size and
                 into.isInt() and from.isInt())
             {
-                // intcast
-                return unimplemented("intcast", .{});
+                const from_w = Width.fromBytesExact(from.size).?;
+
+                switch (getIntSignedness(into)) {
+                    .unsigned => {
+                        if (into.size > from.size) {
+                            try b.op(.{ .extend = from_w });
+                        }
+                    },
+                    .signed => switch (getIntSignedness(from)) {
+                        .unsigned => {
+                            if (into.size > from.size) {
+                                try b.op(.{ .extend = from_w });
+                            }
+                        },
+                        .signed => {
+                            try b.op(.{ .sign_extend = from_w });
+
+                            const into_w = Width.fromBytesExact(into.size).?;
+                            if (into_w != .word) {
+                                try b.op(.{ .sign_narrow = into_w });
+                            }
+                        },
+                    },
+                }
             }
 
             // all other casts are noops

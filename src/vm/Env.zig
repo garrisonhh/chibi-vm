@@ -452,6 +452,15 @@ fn generic_subs(comptime W: Width) type {
             try env.push(u64, try env.pop(U));
         }
 
+        fn sign_extend(env: *Env, _: *State) Error!void {
+            try env.push(i64, try env.pop(I));
+        }
+
+        fn sign_narrow(env: *Env, _: *State) Error!void {
+            const n: I = @intCast(try env.pop(i64));
+            try env.push(I, n);
+        }
+
         fn load(env: *Env, state: *State) Error!void {
             const offset = state.readValue(u16);
             const start = try env.pop([*]U);

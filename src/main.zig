@@ -48,17 +48,23 @@ pub fn main() !void {
         .{
             .name = "test_file",
             .contents =
-            \\int foo(int x) {
+            \\int fib(int x) {
             \\  if (x == 0) {
             \\    return 1;
             \\  } else if (x == 1) {
             \\    return 1;
             \\  }
             \\
-            \\  return foo(x - 1) + foo(x - 2);
+            \\  return fib(x - 1) + fib(x - 2);
             \\}
             \\
-            ,
+            \\int strlen(const char *str) {
+            \\  if (*str) {
+            \\    return 1 + strlen(str + 1);
+            \\  }
+            \\  return 0;
+            \\}
+            \\
         },
     };
 
@@ -70,7 +76,13 @@ pub fn main() !void {
 
     for (0..10) |n| {
         try env.push(i32, @as(i32, @intCast(n)));
-        try env.exec(&mod, "foo");
-        std.debug.print("{} -> {}\n", .{n, try env.pop(i32)});
+        try env.exec(&mod, "fib");
+        std.debug.print("fib({}) = {}\n", .{n, try env.pop(i32)});
     }
+
+    const CStr = *const [*:0]u8;
+    const str = "hello, world!";
+    try env.push(CStr, @as(CStr, @alignCast(@ptrCast(str))));
+    try env.exec(&mod, "strlen");
+    std.debug.print("strlen(\"{s}\") = {}\n", .{str, try env.pop(i32)});
 }
