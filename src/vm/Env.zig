@@ -176,7 +176,6 @@ fn call(env: *Env, state: *State, dest: u32) Error!void {
 
 pub const ExecError = Allocator.Error || Error || error{
     NoSuchFunction,
-    InvalidByteOp,
 };
 
 /// writes the next op to stderr for debugging
@@ -260,9 +259,7 @@ pub fn exec(
         }
 
         const byte = state.readByte();
-        const sub = byte_subs[byte] orelse {
-            return ExecError.InvalidByteOp;
-        };
+        const sub = byte_subs[byte].?;
 
         try sub(env, &state);
     }
@@ -290,14 +287,21 @@ const byte_subs = blk: {
 
     for (std.enums.values(Opcode)) |opcode| {
         const op_name = @tagName(opcode);
+        const is_sized = opcode.meta().sized;
 
-        if (@hasDecl(monomorphic_subs, op_name)) {
+        if (!is_sized) {
+            if (!@hasDecl(monomorphic_subs, op_name)) {
+                @compileError("no implementation for opcode: " ++ op_name);
+            }
+
             const func = @field(monomorphic_subs, op_name);
             const bo = ByteOp{ .opcode = opcode };
 
             arr[@as(u8, @bitCast(bo))] = &func;
         } else for (generic_sub_namespaces) |ns| {
-            if (!@hasDecl(ns, op_name)) continue;
+            if (!@hasDecl(ns, op_name)) {
+                @compileError("no implementation for opcode: " ++ op_name);
+            }
 
             const func = @field(ns, op_name);
             const bo = ByteOp{
@@ -355,6 +359,23 @@ const monomorphic_subs = struct {
         const offset = state.readValue(i16);
         const ptr = ptrAdd(*anyopaque, env.stack.base, offset);
         try env.push(*anyopaque, ptr);
+    }
+
+    fn @"and"(env: *Env, _: *State) Error!void {
+        const a = try env.pop(bool);
+        const b = try env.pop(bool);
+        try env.push(bool, a and b);
+    }
+
+    fn @"or"(env: *Env, _: *State) Error!void {
+        const a = try env.pop(bool);
+        const b = try env.pop(bool);
+        try env.push(bool, a or b);
+    }
+
+    fn not(env: *Env, _: *State) Error!void {
+        const val = try env.pop(bool);
+        try env.push(bool, !val);
     }
 
     fn zero(env: *Env, state: *State) Error!void {
@@ -430,6 +451,23 @@ fn generic_subs(comptime W: Width) type {
             const b = try env.pop(U);
             const a = try env.pop(U);
             try env.push(U, a % b);
+        }
+
+        fn bitand(env: *Env, _: *State) Error!void {
+            try env.push(U, try env.pop(U) & try env.pop(U));
+        }
+
+        fn bitor(env: *Env, _: *State) Error!void {
+            try env.push(U, try env.pop(U) | try env.pop(U));
+        }
+
+        fn bitxor(env: *Env, _: *State) Error!void {
+            try env.push(U, try env.pop(U) ^ try env.pop(U));
+        }
+
+        fn bitcom(env: *Env, _: *State) Error!void {
+            const val = try env.pop(U);
+            try env.push(U, ~val);
         }
 
         fn neg(env: *Env, _: *State) Error!void {

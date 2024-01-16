@@ -116,8 +116,6 @@ pub const Opcode = enum(u6) {
             .divu,
             .divi,
             .mod,
-            .@"and",
-            .@"or",
             .bitand,
             .bitor,
             .bitxor,
@@ -125,14 +123,20 @@ pub const Opcode = enum(u6) {
             .ne,
             => .{ .inputs = 2, .outputs = 1, .sized = true },
 
-            .not,
-            .bitcom,
+            .@"and",
+            .@"or",
+            => .{ .inputs = 2, .outputs = 1, .sized = false },
+
             .eqz,
             .neg,
+            .bitcom,
             .extend,
             .sign_extend,
             .sign_narrow,
             => .{ .inputs = 1, .outputs = 1, .sized = true },
+
+            .not,
+            => .{ .inputs = 1, .outputs = 1, .sized = false },
 
             .zero => .{ .inputs = 1, .outputs = 1, .sized = false },
             .copy => .{ .inputs = 2, .outputs = 1, .sized = false },
