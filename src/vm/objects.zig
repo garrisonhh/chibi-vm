@@ -90,6 +90,7 @@ pub const Builder = struct {
         while (backref_lists.next()) |list| {
             list.deinit(ally);
         }
+        self.backrefs.deinit(ally);
     }
 
     pub fn build(self: *Self) Allocator.Error!Object {
@@ -146,7 +147,7 @@ pub const Builder = struct {
         }
     }
 
-    /// add an name to a label
+    /// add a name to a label
     /// *name must outlive builder + object*
     pub fn global(
         self: *Self,
@@ -196,7 +197,7 @@ pub const Builder = struct {
         return lbl;
     }
 
-    /// compile an op and add it to the
+    /// compile an op to bytecode and add it to the builder's code
     pub fn op(self: *Self, o: Op) Allocator.Error!void {
         const ally = self.ally;
 

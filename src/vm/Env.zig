@@ -163,6 +163,7 @@ pub fn pop(env: *Env, comptime T: type) Error!T {
     return env.stack.pop(T);
 }
 
+/// does the necessary stack and state twiddling for calling a function
 fn call(env: *Env, state: *State, dest: u32) Error!void {
     try env.push(Stack.Frame, Stack.Frame{
         .base = env.stack.base,
@@ -173,10 +174,6 @@ fn call(env: *Env, state: *State, dest: u32) Error!void {
 }
 
 // execution ===================================================================
-
-pub const ExecError = Allocator.Error || Error || error{
-    NoSuchFunction,
-};
 
 /// writes the next op to stderr for debugging
 fn dumpNext(env: *const Env, state: State) void {
@@ -233,6 +230,29 @@ fn dumpStack(env: *const Env) void {
     std.debug.print("\n", .{});
 }
 
+/// execute ops until halted
+fn run(env: *Env, state: *State) Error!void {
+    while (state.pc < state.code.len) {
+        const byte = state.readByte();
+        const sub = byte_subs[byte].?;
+
+        try sub(env, state);
+    }
+}
+
+/// execute raw bytecode from start address
+pub fn execBytecode(env: *Env, code: []const u8, start: usize) Error!void {
+    var state = State{
+        .code = code,
+        .pc = start,
+    };
+    try env.run(&state);
+}
+
+pub const ExecError = Error || error{
+    NoSuchFunction,
+};
+
 /// execute code exported from a module
 pub fn exec(
     env: *Env,
@@ -251,21 +271,7 @@ pub fn exec(
     };
     try env.call(&state, start);
 
-    // execute ops until halted
-    while (state.pc < state.code.len) {
-        if (in_debug) {
-            // dumpStack(env);
-            // dumpNext(env, state);
-        }
-
-        const byte = state.readByte();
-        const sub = byte_subs[byte].?;
-
-        try sub(env, &state);
-    }
-
-    // there should be one value remaining
-    std.debug.assert(env.stack.used() == 8);
+    try env.run(&state);
 }
 
 // opcode functions ============================================================

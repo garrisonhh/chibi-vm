@@ -64,6 +64,9 @@ pub fn main() !void {
             \\  return trav - str;
             \\}
             \\
+            \\int add(int a, int b) {
+            \\  return a + b;
+            \\}
         },
     };
 
@@ -84,4 +87,9 @@ pub fn main() !void {
     try env.push(CStr, @as(CStr, @alignCast(@ptrCast(str))));
     try env.exec(&mod, "strlen");
     std.debug.print("strlen(\"{s}\") = {}\n", .{str, try env.pop(i32)});
+
+    try env.push(i32, 1);
+    try env.push(i32, 2);
+    try env.exec(&mod, "add");
+    std.debug.print("add result: {}\n", .{try env.pop(i32)});
 }
