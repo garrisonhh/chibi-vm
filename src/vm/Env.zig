@@ -75,6 +75,12 @@ const Stack = struct {
         };
     }
 
+    /// reset to original state
+    fn reset(self: *Stack) void {
+        self.base = self.mem.ptr;
+        self.top = self.mem.ptr;
+    }
+
     /// total stack used
     fn used(self: Stack) usize {
         return @intFromPtr(self.top) - @intFromPtr(self.mem.ptr);
@@ -149,6 +155,11 @@ pub fn init(ally: Allocator, cfg: Config) Allocator.Error!Env {
 
 pub fn deinit(env: *Env, ally: Allocator) void {
     ally.free(env.stack.mem);
+}
+
+/// reset env to default state
+pub fn reset(env: *Env) void {
+    env.stack.reset();
 }
 
 pub fn peek(env: Env, comptime T: type) Error!T {

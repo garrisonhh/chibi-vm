@@ -54,6 +54,10 @@ const simple = struct {
         try env.execBytecode(mod.code, offset);
     }
 
+    fn reset() void {
+        env.reset();
+    }
+
     fn push(comptime T: type, value: T) !void {
         try env.push(T, value);
     }
@@ -64,12 +68,44 @@ const simple = struct {
         try std.testing.expectEqual(expected, actual);
     }
 
-    fn expectEmpty() !void {
-        if (env.stack.base != env.stack.mem.ptr) {
-            return error.StackNotEmpty;
+    fn expectStackSize(expected: usize) !void {
+        const size = @intFromPtr(env.stack.top) - @intFromPtr(env.stack.mem.ptr);
+        if (size != expected) {
+            std.debug.print("expected stack size: {} found: {}\n", .{expected, size});
+            return error.TestUnexpectedStackSize;
         }
     }
+
+    fn expectEmpty() !void {
+        try expectStackSize(0);
+    }
 };
+
+test "enter" {
+    try simple.init();
+    defer simple.deinit();
+
+    const cases = [_]u16 {
+        0,
+        16,
+        22,
+        std.math.maxInt(u16),
+        std.math.maxInt(u16) - 1,
+    };
+
+    for (cases) |reserve| {
+        var mod = try simple.build(&.{
+            Op{ .enter = reserve },
+        });
+        defer mod.deinit(ally);
+
+        const expected = std.mem.alignForward(usize, reserve, 8);
+
+        try simple.run(&mod);
+        try simple.expectStackSize(expected);
+        simple.reset();
+    }
+}
 
 test "add" {
     try simple.init();
