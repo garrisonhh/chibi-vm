@@ -401,7 +401,21 @@ fn applyVerifier(
     }
 }
 
-fn sized_verifiers(comptime width: Width) type {
+const unique_verifiers = struct {
+    pub fn @"and"(a: bool, b: bool) Env.Error!bool {
+        return a and b;
+    }
+
+    pub fn @"or"(a: bool, b: bool) Env.Error!bool {
+        return a or b;
+    }
+
+    pub fn not(a: bool) Env.Error!bool {
+        return !a;
+    }
+};
+
+fn generic_verifiers(comptime width: Width) type {
     const I = std.meta.Int(.signed, @as(u16, width.bytes()) * 8);
     const U = std.meta.Int(.unsigned, @as(u16, width.bytes()) * 8);
     return struct {
@@ -508,8 +522,21 @@ test "generated" {
     try simple.init();
     defer simple.deinit();
 
+    const uvs = unique_verifiers;
+    inline for (@typeInfo(uvs).Struct.decls) |decl| {
+        const function = @field(uvs, decl.name);
+
+        const opcode = std.meta.stringToEnum(Opcode, decl.name).?;
+        const op = switch (opcode) {
+            .@"and", .@"or", .not => @unionInit(Op, decl.name, {}),
+            else => unreachable,
+        };
+
+        try applyVerifier(@TypeOf(function), function, op);
+    }
+
     inline for (comptime std.enums.values(Width)) |width| {
-        const ns = sized_verifiers(width);
+        const ns = generic_verifiers(width);
         inline for (@typeInfo(ns).Struct.decls) |decl| {
             const function = @field(ns, decl.name);
             const op = @unionInit(Op, decl.name, width);
