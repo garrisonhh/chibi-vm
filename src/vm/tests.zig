@@ -74,6 +74,8 @@ const simple = struct {
     }
 };
 
+// manually tweaked tests ======================================================
+
 test "enter" {
     try simple.init();
     defer simple.deinit();
@@ -107,6 +109,72 @@ test "enter" {
 
         simple.reset();
     }
+}
+
+// generated tests =============================================================
+
+const Prng = std.rand.DefaultPrng;
+const random_seed = 0;
+const num_random_cases = 1000;
+
+fn generateRandom(prng: *Prng, comptime T: type) T {
+    return switch (@typeInfo(T)) {
+        .Bool => prng.random().boolean(),
+        .Int => prng.random().int(T),
+        else => @compileError("generate random for type: " ++ @typeName(T)),
+    };
+}
+
+/// generates a whole bunch of random cases for a type, edge cases and all
+fn generateCases(comptime N: comptime_int, comptime T: type) ![]const [N]T {
+    var cases = std.ArrayList([N]T).init(ally);
+    defer cases.deinit();
+
+    // add common edge cases for types where this is useful
+    switch (@typeInfo(T)) {
+        .Int => {
+            const max_int = std.math.maxInt(T);
+            const min_int = std.math.minInt(T);
+            const edges = [_]T{0, 1, max_int, min_int};
+
+            // generate all N-length combinations of edges
+            var indices: [N]usize = undefined;
+            @memset(&indices, 0);
+
+            combos: while (true) {
+                var combo: [N]T = undefined;
+                for (&combo, indices) |*slot, i| {
+                    slot.* = edges[i];
+                }
+
+                try cases.append(combo);
+
+                var i: usize = 0;
+                while (true) {
+                    indices[i] += 1;
+                    if (indices[i] < edges.len) break;
+
+                    indices[i] = 0;
+                    i += 1;
+                    if (i >= N) break :combos;
+                }
+            }
+        },
+        else => {},
+    }
+
+    // add random cases
+    var prng = Prng.init(random_seed);
+    for (0..num_random_cases) |_| {
+        var arr: [N]T = undefined;
+        for (&arr) |*slot| {
+            slot.* = generateRandom(&prng, T);
+        }
+
+        try cases.append(arr);
+    }
+
+    return try cases.toOwnedSlice();
 }
 
 /// functions for sized, binary ops which encode the expected behavior
@@ -170,35 +238,8 @@ test "sized-binary-ops" {
 
     inline for (comptime std.enums.values(Width)) |w| {
         const I = simple.int(w);
-
-        // generate cases
-        var cases = std.ArrayList([2]I).init(ally);
-        defer cases.deinit();
-
-        const max_int = std.math.maxInt(I);
-        const min_int = std.math.minInt(I);
-
-        // common edge cases
-        try cases.append(.{0, 0});
-        try cases.append(.{1, 1});
-        try cases.append(.{-1, -1});
-        try cases.append(.{max_int, 1});
-        try cases.append(.{1, max_int});
-        try cases.append(.{min_int, 1});
-        try cases.append(.{1, max_int});
-        try cases.append(.{max_int, min_int});
-        try cases.append(.{min_int, max_int});
-        try cases.append(.{max_int, max_int});
-        try cases.append(.{min_int, min_int});
-
-        var prng = std.rand.DefaultPrng.init(0);
-        const random_cases = 1000;
-        for (0..random_cases) |_| {
-            try cases.append(.{
-                prng.random().int(I),
-                prng.random().int(I),
-            });
-        }
+        const cases = try generateCases(2, I);
+        defer ally.free(cases);
 
         // run case on each verifier
         const verifiers = @typeInfo(sized_binary_verifiers).Struct.decls;
@@ -211,7 +252,7 @@ test "sized-binary-ops" {
             });
             defer mod.deinit(ally);
 
-            for (cases.items) |case| {
+            for (cases) |case| {
                 const lhs = case[0];
                 const rhs = case[1];
 
@@ -220,7 +261,7 @@ test "sized-binary-ops" {
                 try simple.run(&mod);
 
                 const actual = try simple.pop(I);
-                const expected = func(I, );
+                const expected = func(I, lhs, rhs);
 
                 if (actual != expected) {
                     std.debug.print(
