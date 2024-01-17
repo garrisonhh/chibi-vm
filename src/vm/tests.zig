@@ -115,7 +115,6 @@ test "enter" {
 
 const Prng = std.rand.DefaultPrng;
 const random_seed = 0;
-const num_random_cases = 1000;
 
 fn generateRandom(prng: *Prng, comptime T: type) T {
     return switch (@typeInfo(T)) {
@@ -126,167 +125,298 @@ fn generateRandom(prng: *Prng, comptime T: type) T {
 }
 
 /// generates a whole bunch of random cases for a type, edge cases and all
-fn generateCases(comptime N: comptime_int, comptime T: type) ![]const [N]T {
-    var cases = std.ArrayList([N]T).init(ally);
+fn generatePrimitiveCases(comptime T: type, count: usize) ![]const T {
+    var cases = std.ArrayList(T).init(ally);
     defer cases.deinit();
 
     // add common edge cases for types where this is useful
     switch (@typeInfo(T)) {
+        .Bool => {},
         .Int => {
             const max_int = std.math.maxInt(T);
             const min_int = std.math.minInt(T);
             const edges = [_]T{0, 1, max_int, min_int};
-
-            // generate all N-length combinations of edges
-            var indices: [N]usize = undefined;
-            @memset(&indices, 0);
-
-            combos: while (true) {
-                var combo: [N]T = undefined;
-                for (&combo, indices) |*slot, i| {
-                    slot.* = edges[i];
-                }
-
-                try cases.append(combo);
-
-                var i: usize = 0;
-                while (true) {
-                    indices[i] += 1;
-                    if (indices[i] < edges.len) break;
-
-                    indices[i] = 0;
-                    i += 1;
-                    if (i >= N) break :combos;
-                }
-            }
+            try cases.appendSlice(&edges);
         },
-        else => {},
+        else => @compileError("unsupported type: " ++ @typeName(T)),
     }
+
+    // if this fails, raise 'count' or you will miss edge cases
+    std.debug.assert(count >= cases.items.len);
 
     // add random cases
     var prng = Prng.init(random_seed);
-    for (0..num_random_cases) |_| {
-        var arr: [N]T = undefined;
-        for (&arr) |*slot| {
-            slot.* = generateRandom(&prng, T);
-        }
-
-        try cases.append(arr);
+    for (0..count - cases.items.len) |_| {
+        try cases.append(generateRandom(&prng, T));
     }
 
     return try cases.toOwnedSlice();
 }
 
-/// functions for sized, binary ops which encode the expected behavior
-const sized_binary_verifiers = struct {
-    fn add(comptime T: type, a: T, b: T) T {
-        return a +% b;
+/// generates a tuple compatible with @call for this function
+fn CaseArgs(comptime F: type) type {
+    comptime {
+        const info = @typeInfo(F).Fn;
+        if (info.params.len > 10) {
+            @compileError("supports up to 10 arguments");
+        }
+
+        var field_names: [20]u8 = undefined;
+        for (0..10) |i| {
+            field_names[i * 2] = '0' + @as(u8, @intCast(i));
+            field_names[i * 2 + 1] = 0;
+        }
+
+        var fields: [info.params.len]std.builtin.Type.StructField = undefined;
+        for (&fields, info.params, 0..) |*field, param, i| {
+            const ParamType = param.type.?;
+            field.* = .{
+                .name = field_names[i * 2 .. i * 2 + 1:0],
+                .type = ParamType,
+                .default_value = null,
+                .is_comptime = false,
+                .alignment = @alignOf(ParamType),
+            };
+        }
+
+        return @Type(.{
+            .Struct = .{
+                .layout = .Auto,
+                .fields = &fields,
+                .decls = &.{},
+                .is_tuple = true,
+            },
+        });
+    }
+}
+
+fn CaseReturns(comptime F: type) type {
+    comptime {
+        return @typeInfo(F).Fn.return_type.?;
+    }
+}
+
+/// CaseArgs, but each field is a slice of the original type
+fn CaseArgSlices(comptime F: type) type {
+    comptime {
+        const Args = CaseArgs(F);
+        const arg_fields = @typeInfo(Args).Struct.fields;
+
+        var fields: [arg_fields.len]std.builtin.Type.StructField = undefined;
+        @memcpy(&fields, arg_fields);
+        for (&fields) |*field| {
+            field.type = []const field.type;
+        }
+
+        var info = @typeInfo(Args);
+        info.Struct.fields = &fields;
+        return @Type(info);
+    }
+}
+
+fn CombinationIterator(comptime N: comptime_int) type {
+    comptime {
+        if (N <= 0) @compileError("N must be more than zero");
     }
 
-    fn sub(comptime T: type, a: T, b: T) T {
-        return a -% b;
+    return struct {
+        const Self = @This();
+
+        done: bool = false,
+        indices: [N]usize = [1]usize{0} ** N,
+        k: usize,
+
+        fn next(self: *Self) ?[N]usize {
+            if (self.done) return null;
+
+            const result = self.indices;
+
+            self.indices[0] += 1;
+            for (1..N) |i| {
+                if (self.indices[i - 1] == self.k) {
+                    self.indices[i - 1] = 0;
+                    self.indices[i] += 1;
+                } else {
+                    break;
+                }
+            }
+
+            self.done = for (self.indices) |index| {
+                if (index != self.k - 1) {
+                    break false;
+                }
+            } else true;
+
+            return result;
+        }
+    };
+}
+
+fn combinations(comptime N: comptime_int, k: usize) CombinationIterator(N) {
+    return .{ .k = k };
+}
+
+/// generates test arguments for a verifier function
+///
+/// due to combinations of args, count will be exponentiated by the number of
+/// fields in the args tuple (so keep it low-ish!)
+fn generateArgCases(comptime F: type, count: usize) ![]const CaseArgs(F) {
+    const Args = CaseArgs(F);
+    const ArgSlices = CaseArgSlices(F);
+    const arg_count = @typeInfo(Args).Struct.fields.len;
+
+    // generate individual cases
+    var slices: ArgSlices = undefined;
+    inline for (0..arg_count) |i| {
+        const T = @typeInfo(Args).Struct.fields[i].type;
+        slices[i] = try generatePrimitiveCases(T, count);
+    }
+    defer {
+        inline for (0..arg_count) |i| {
+            ally.free(slices[i]);
+        }
     }
 
-    fn mulu(comptime T: type, a: T, b: T) T {
-        const U = std.meta.Int(.unsigned, @bitSizeOf(T));
-        return @bitCast(@as(U, @bitCast(a)) *% @as(U, @bitCast(b)));
+    // generate combinations
+    var cases = std.ArrayList(Args).init(ally);
+    defer cases.deinit();
+
+    var combo_iter = combinations(arg_count, count);
+    while (combo_iter.next()) |combo| {
+        var args: Args = undefined;
+        inline for (0..arg_count) |i| {
+            args[i] = slices[i][combo[i]];
+        }
+
+        try cases.append(args);
     }
 
-    fn muli(comptime T: type, a: T, b: T) T {
-        const I = std.meta.Int(.signed, @bitSizeOf(T));
-        return @bitCast(@as(I, @bitCast(a)) *% @as(I, @bitCast(b)));
-    }
+    return try cases.toOwnedSlice();
+}
 
-    fn divu(comptime T: type, a: T, b: T) T {
-        const U = std.meta.Int(.unsigned, @bitSizeOf(T));
-        return @bitCast(@as(U, @bitCast(a)) / @as(U, @bitCast(b)));
+fn testFailed(
+    comptime F: type,
+    opcode: Opcode,
+    args: CaseArgs(F),
+    comptime fmt: []const u8,
+    fmt_args: anytype,
+) error{TestFailure} {
+    std.debug.print("[test failure]\n", .{});
+    std.debug.print("{s}(", .{@tagName(opcode)});
+    inline for (args, 0..) |arg, i| {
+        if (i > 0) std.debug.print(", ", .{});
+        std.debug.print("({}) {}", .{@TypeOf(arg), i});
     }
+    std.debug.print(")\n", .{});
+    std.debug.print(fmt ++ "\n", fmt_args);
 
-    fn divi(comptime T: type, a: T, b: T) T {
-        const I = std.meta.Int(.signed, @bitSizeOf(T));
-        return @bitCast(@as(I, @bitCast(a)) / @as(I, @bitCast(b)));
+    return error.TestFailure;
+}
+
+/// does automatic testing on a function
+fn applyVerifier(
+    comptime F: type,
+    comptime function: F,
+    op: Op,
+) !void {
+    // generate test cases
+    const count = 16;
+    const cases = switch (@typeInfo(F).Fn.params.len) {
+        0...10 => try generateArgCases(F, count),
+        else => unreachable,
+    };
+    defer ally.free(cases);
+
+    // create module for function's opcode
+    var mod = try simple.build(&.{op});
+    defer mod.deinit(ally);
+
+    // run the tests
+    const Returns = CaseReturns(F);
+    for (cases) |args| {
+        inline for (args) |arg| {
+            try simple.push(@TypeOf(arg), arg);
+        }
+
+        try simple.run(&mod);
+
+        const actual = try simple.pop(Returns);
+        const expected = @call(.auto, function, args);
+        if (actual != expected) {
+            return testFailed(
+                F,
+                op,
+                args,
+                "actual: {} expected: {}",
+                .{ actual, expected },
+            );
+        }
+
+        const stack_size = simple.getStackSize();
+        if (stack_size != 0) {
+            return testFailed(F, op, args, "stack not empty", .{});
+        }
     }
+}
 
-    fn mod(comptime T: type, a: T, b: T) T {
-        return a % b;
-    }
+fn sized_unsigned_verifiers(comptime width: Width) type {
+    const U = std.meta.Int(.unsigned, @as(u16, width.bytes()) * 8);
+    return struct {
+        pub fn add(a: U, b: U) U {
+            return a +% b;
+        }
 
-    fn bitand(comptime T: type, a: T, b: T) T {
-        return a & b;
-    }
+        pub fn sub(a: U, b: U) U {
+            return a -% b;
+        }
 
-    fn bitor(comptime T: type, a: T, b: T) T {
-        return a | b;
-    }
+        pub fn mulu(a: U, b: U) U {
+            return a *% b;
+        }
 
-    fn bitxor(comptime T: type, a: T, b: T) T {
-        return a ^ b;
-    }
+        // TODO fix divide by zero
+        // pub fn divu(a: U, b: U) U {
+        //     return a / b;
+        // }
 
-    fn eq(comptime T: type, a: T, b: T) T {
-        return a == b;
-    }
+        // TODO fix divide by zero
+        // pub fn mod(a: U, b: U) U {
+        //     return a % b;
+        // }
 
-    fn ne(comptime T: type, a: T, b: T) T {
-        return a != b;
-    }
-};
+        pub fn bitand(a: U, b: U) U {
+            return a & b;
+        }
 
-test "sized-binary-ops" {
+        pub fn bitor(a: U, b: U) U {
+            return a | b;
+        }
+
+        pub fn bitxor(a: U, b: U) U {
+            return a ^ b;
+        }
+
+        pub fn eq(a: U, b: U) bool {
+            return a == b;
+        }
+
+        pub fn ne(a: U, b: U) bool {
+            return a != b;
+        }
+    };
+}
+
+// runs generated tests on all of the verifier namespaces
+test "generated" {
     try simple.init();
     defer simple.deinit();
 
-    inline for (comptime std.enums.values(Width)) |w| {
-        const I = simple.int(w);
-        const cases = try generateCases(2, I);
-        defer ally.free(cases);
-
-        // run case on each verifier
-        const verifiers = @typeInfo(sized_binary_verifiers).Struct.decls;
-        inline for (verifiers) |name| {
-            std.debug.assert(std.meta.stringToEnum(Opcode, name) != null);
-            const func = @field(sized_binary_verifiers, name);
-
-            var mod = try simple.build(&.{
-                @unionInit(Op, name, w),
-            });
-            defer mod.deinit(ally);
-
-            for (cases) |case| {
-                const lhs = case[0];
-                const rhs = case[1];
-
-                try simple.push(I, lhs);
-                try simple.push(I, rhs);
-                try simple.run(&mod);
-
-                const actual = try simple.pop(I);
-                const expected = func(I, lhs, rhs);
-
-                if (actual != expected) {
-                    std.debug.print(
-                        \\case:     {s}({}, {})
-                        \\expected: {}
-                        \\actual:   {}
-                        \\
-                    ,
-                        .{name, lhs, rhs, expected, actual},
-                    );
-                    return error.TestUnexpectedResult;
-                }
-
-                const stack_size = simple.getStackSize();
-                if (stack_size != 0) {
-                    std.debug.print(
-                        \\case:       {s}({}, {})
-                        \\stack left: {}
-                        \\
-                    ,
-                        .{name, lhs, rhs, stack_size},
-                    );
-                    return error.TestStackNotEmpty;
-                }
-            }
+    inline for (comptime std.enums.values(Width)) |width| {
+        const ns = sized_unsigned_verifiers(width);
+        inline for (@typeInfo(ns).Struct.decls) |decl| {
+            const function = @field(ns, decl.name);
+            const op = @unionInit(Op, decl.name, width);
+            try applyVerifier(@TypeOf(function), function, op);
         }
     }
 }

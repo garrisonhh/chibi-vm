@@ -27,6 +27,7 @@ const Env = @This();
 pub const Error = error{
     VmStackOverflow,
     VmStackUnderflow,
+    VmDivideByZero,
 };
 
 const State = struct {
