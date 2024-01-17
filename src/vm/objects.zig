@@ -203,44 +203,11 @@ pub const Builder = struct {
 
         // construct byteop
         const width: ?ops.Width = switch (o) {
-            .halt,
-            .label,
-            .enter,
-            .ret,
-            .drop,
-            .local,
-            .zero,
-            .copy,
-            .jump,
-            .call,
-            => null,
-
-            .add,
-            .sub,
-            .mulu,
-            .muli,
-            .divu,
-            .divi,
-            .mod,
-            .@"and",
-            .@"or",
-            .not,
-            .bitand,
-            .bitor,
-            .bitcom,
-            .bitxor,
-            .eq,
-            .ne,
-            .eqz,
-            .neg,
-            .extend,
-            .sign_extend,
-            .sign_narrow,
-            => |w| w,
-
-            .constant => |c| c,
-            .load, .store => |addr| addr.width,
-            .jz, .jnz => |cj| cj.width,
+            inline else => |meta| switch (@TypeOf(meta)) {
+                ops.Width, Op.Constant => meta,
+                Op.Address, Op.CondJmp => meta.width,
+                else => null,
+            }
         };
 
         const byteop = ByteOp{

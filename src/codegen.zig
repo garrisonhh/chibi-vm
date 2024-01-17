@@ -79,7 +79,7 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
         .null_expr => {
             try b.op(.{ .constant = .{ .byte = .{0} } });
         },
-        inline .add, .sub, .mod => |args, tag| {
+        inline .add, .sub => |args, tag| {
             const width = Width.fromBytesExact(node.ty.?.size).?;
 
             try lowerNode(b, ctx, args[0]);
@@ -87,7 +87,7 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
 
             try b.op(@unionInit(Op, @tagName(tag), width));
         },
-        inline .mul, .div => |args, tag| {
+        inline .mul, .div, .mod => |args, tag| {
             const ty = node.ty.?;
             const width = Width.fromBytesExact(ty.size).?;
 
@@ -104,11 +104,13 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
                     .signed => switch (tag) {
                         .mul => .{ .muli = width },
                         .div => .{ .divi = width },
+                        .mod => .{ .modi = width },
                         else => unreachable,
                     },
                     .unsigned => switch (tag) {
                         .mul => .{ .mulu = width },
                         .div => .{ .divu = width },
+                        .mod => .{ .modu = width },
                         else => unreachable,
                     },
                 };

@@ -434,9 +434,31 @@ fn sized_verifiers(comptime width: Width) type {
             };
         }
 
-        pub fn mod(a: U, b: U) Env.Error!U {
-            if (b == 0) return Env.Error.VmDivideByZero;
-            return a % b;
+        pub fn modu(a: U, b: U) Env.Error!U {
+            return std.math.mod(U, a, b) catch |e| switch (e) {
+                error.DivisionByZero => Env.Error.VmDivideByZero,
+            };
+        }
+
+        pub fn modi(a: I, b: I) Env.Error!I {
+            if (b == 0) {
+                return Env.Error.VmDivideByZero;
+            } else if (b < 0) {
+                const denom = std.math.negate(b) catch |e| switch (e) {
+                    error.Overflow => return Env.Error.VmIntegerOverflow,
+                };
+                return std.math.negate(@rem(a, denom)) catch |e| switch (e) {
+                    error.Overflow => Env.Error.VmIntegerOverflow,
+                };
+            } else {
+                return @rem(a, b);
+            }
+        }
+
+        pub fn neg(a: I) Env.Error!I {
+            return std.math.negate(a) catch |e| switch (e) {
+                error.Overflow => error.VmIntegerOverflow,
+            };
         }
 
         pub fn bitand(a: U, b: U) Env.Error!U {
@@ -451,6 +473,10 @@ fn sized_verifiers(comptime width: Width) type {
             return a ^ b;
         }
 
+        pub fn bitcom(a: U) Env.Error!U {
+            return ~a;
+        }
+
         pub fn eq(a: U, b: U) Env.Error!bool {
             return a == b;
         }
@@ -463,10 +489,16 @@ fn sized_verifiers(comptime width: Width) type {
             return a == 0;
         }
 
-        pub fn neg(a: I) Env.Error!I {
-            return std.math.negate(a) catch |e| switch (e) {
-                error.Overflow => error.VmIntegerOverflow,
-            };
+        pub fn extend(a: U) Env.Error!u64 {
+            return a;
+        }
+
+        pub fn sign_extend(a: I) Env.Error!i64 {
+            return a;
+        }
+
+        pub fn sign_narrow(a: i64) Env.Error!I {
+            return std.math.cast(I, a) orelse Env.Error.VmIntegerOverflow;
         }
     };
 }

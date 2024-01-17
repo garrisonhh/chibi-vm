@@ -459,7 +459,7 @@ fn generic_subs(comptime W: Width) type {
             const a = try env.pop(U);
             const res = std.math.divFloor(U, a, b) catch |e| {
                 return switch (e) {
-                    error.DivisionByZero => Env.Error.VmDivideByZero,
+                    error.DivisionByZero => Error.VmDivideByZero,
                 };
             };
             try env.push(U, res);
@@ -470,18 +470,40 @@ fn generic_subs(comptime W: Width) type {
             const a = try env.pop(I);
             const res = std.math.divFloor(I, a, b) catch |e| {
                 return switch (e) {
-                    error.Overflow => Env.Error.VmIntegerOverflow,
-                    error.DivisionByZero => Env.Error.VmDivideByZero,
+                    error.Overflow => Error.VmIntegerOverflow,
+                    error.DivisionByZero => Error.VmDivideByZero,
                 };
             };
             try env.push(I, res);
         }
 
-        fn mod(env: *Env, _: *State) Error!void {
+        fn modu(env: *Env, _: *State) Error!void {
             const b = try env.pop(U);
             const a = try env.pop(U);
-            if (b == 0) return Error.VmDivideByZero;
-            try env.push(U, a % b);
+            const res = std.math.mod(U, a, b) catch |e| switch (e) {
+                error.DivisionByZero => return Error.VmDivideByZero,
+            };
+            try env.push(U, res);
+        }
+
+        // TODO is this too complicated to have as an instruction?
+        fn modi(env: *Env, _: *State) Error!void {
+            const b = try env.pop(I);
+            const a = try env.pop(I);
+
+            if (b == 0) {
+                return Error.VmDivideByZero;
+            } else if (b > 0) {
+                try env.push(I, @rem(a, b));
+            } else {
+                const denom = std.math.negate(b) catch |e| switch (e) {
+                    error.Overflow => return Error.VmIntegerOverflow,
+                };
+                const res = std.math.negate(@rem(a, denom)) catch |e| switch (e) {
+                    error.Overflow => return Error.VmIntegerOverflow,
+                };
+                try env.push(I, res);
+            }
         }
 
         fn bitand(env: *Env, _: *State) Error!void {
@@ -530,8 +552,10 @@ fn generic_subs(comptime W: Width) type {
         }
 
         fn sign_narrow(env: *Env, _: *State) Error!void {
-            const n: I = @intCast(try env.pop(i64));
-            try env.push(I, n);
+            const res = std.math.cast(I, try env.pop(i64)) orelse {
+                return Error.VmIntegerOverflow;
+            };
+            try env.push(I, res);
         }
 
         fn load(env: *Env, state: *State) Error!void {
