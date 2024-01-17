@@ -181,7 +181,7 @@ pub const Type = struct {
 
                     else => unreachable,
                 };
-            }
+            },
         }
     }
 
@@ -447,7 +447,7 @@ pub const Node = struct {
                 void => {},
                 Var => {
                     for (0..(level + 1) * 2) |_| std.debug.print(" ", .{});
-                    std.debug.print("{s}: {}\n", .{meta.name, meta.ty});
+                    std.debug.print("{s}: {}\n", .{ meta.name, meta.ty });
                 },
                 If => {
                     meta.cond.dumpIndented("cond", level + 1);

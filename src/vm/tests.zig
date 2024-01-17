@@ -80,7 +80,7 @@ test "enter" {
     try simple.init();
     defer simple.deinit();
 
-    const cases = [_]u16 {
+    const cases = [_]u16{
         0,
         16,
         22,
@@ -135,7 +135,7 @@ fn generatePrimitiveCases(comptime T: type, count: usize) ![]const T {
         .Int => {
             const max_int = std.math.maxInt(T);
             const min_int = std.math.minInt(T);
-            const edges = [_]T{0, 1, max_int, min_int};
+            const edges = [_]T{ 0, 1, max_int, min_int };
             try cases.appendSlice(&edges);
         },
         else => @compileError("unsupported type: " ++ @typeName(T)),
@@ -171,7 +171,7 @@ fn CaseArgs(comptime F: type) type {
         for (&fields, info.params, 0..) |*field, param, i| {
             const ParamType = param.type.?;
             field.* = .{
-                .name = field_names[i * 2 .. i * 2 + 1:0],
+                .name = field_names[i * 2 .. i * 2 + 1 :0],
                 .type = ParamType,
                 .default_value = null,
                 .is_comptime = false,
@@ -190,9 +190,11 @@ fn CaseArgs(comptime F: type) type {
     }
 }
 
+/// return value of function without error union
 fn CaseReturns(comptime F: type) type {
     comptime {
-        return @typeInfo(F).Fn.return_type.?;
+        const eu = @typeInfo(F).Fn.return_type.?;
+        return @typeInfo(eu).ErrorUnion.payload;
     }
 }
 
@@ -305,12 +307,46 @@ fn testFailed(
     std.debug.print("{s}(", .{@tagName(opcode)});
     inline for (args, 0..) |arg, i| {
         if (i > 0) std.debug.print(", ", .{});
-        std.debug.print("({}) {}", .{@TypeOf(arg), i});
+        std.debug.print("({}) {}", .{ @TypeOf(arg), i });
     }
     std.debug.print(")\n", .{});
     std.debug.print(fmt ++ "\n", fmt_args);
 
     return error.TestFailure;
+}
+
+fn VerifierResult(comptime T: type) type {
+    return union(enum) {
+        const Self = @This();
+
+        err: Env.Error,
+        payload: T,
+
+        fn from(eu: Env.Error!T) Self {
+            if (eu) |data| {
+                return .{ .payload = data };
+            } else |e| {
+                return .{ .err = e };
+            }
+        }
+
+        fn eql(self: Self, other: Self) bool {
+            return std.meta.eql(self, other);
+        }
+
+        pub fn format(
+            self: Self,
+            comptime _: []const u8,
+            _: std.fmt.FormatOptions,
+            writer: anytype,
+        ) @TypeOf(writer).Error!void {
+            switch (self) {
+                inline else => |data| {
+                    try writer.print("{}", .{data});
+                },
+            }
+        }
+    };
 }
 
 /// does automatic testing on a function
@@ -333,23 +369,29 @@ fn applyVerifier(
 
     // run the tests
     const Returns = CaseReturns(F);
+    const Result = VerifierResult(Returns);
     for (cases) |args| {
         inline for (args) |arg| {
             try simple.push(@TypeOf(arg), arg);
         }
 
-        try simple.run(&mod);
+        const actual: Result = res: {
+            simple.run(&mod) catch |e| {
+                break :res .{ .err = e };
+            };
 
-        const actual = try simple.pop(Returns);
-        const expected = @call(.auto, function, args);
-        if (actual != expected) {
-            return testFailed(
-                F,
-                op,
-                args,
-                "actual: {} expected: {}",
-                .{ actual, expected },
-            );
+            break :res Result.from(simple.pop(Returns));
+        };
+        const expected = Result.from(@call(.auto, function, args));
+
+        if (!actual.eql(expected)) {
+            const fmt =
+                \\actual:   {}
+                \\expected: {}
+                \\
+            ;
+
+            return testFailed(F, op, args, fmt, .{ actual, expected });
         }
 
         const stack_size = simple.getStackSize();
@@ -359,49 +401,72 @@ fn applyVerifier(
     }
 }
 
-fn sized_unsigned_verifiers(comptime width: Width) type {
+fn sized_verifiers(comptime width: Width) type {
+    const I = std.meta.Int(.signed, @as(u16, width.bytes()) * 8);
     const U = std.meta.Int(.unsigned, @as(u16, width.bytes()) * 8);
     return struct {
-        pub fn add(a: U, b: U) U {
+        pub fn add(a: U, b: U) Env.Error!U {
             return a +% b;
         }
 
-        pub fn sub(a: U, b: U) U {
+        pub fn sub(a: U, b: U) Env.Error!U {
             return a -% b;
         }
 
-        pub fn mulu(a: U, b: U) U {
+        pub fn mulu(a: U, b: U) Env.Error!U {
             return a *% b;
         }
 
-        // TODO fix divide by zero
-        // pub fn divu(a: U, b: U) U {
-        //     return a / b;
-        // }
+        pub fn muli(a: I, b: I) Env.Error!I {
+            return a *% b;
+        }
 
-        // TODO fix divide by zero
-        // pub fn mod(a: U, b: U) U {
-        //     return a % b;
-        // }
+        pub fn divu(a: U, b: U) Env.Error!U {
+            return std.math.divFloor(U, a, b) catch |e| switch (e) {
+                error.DivisionByZero => Env.Error.VmDivideByZero,
+            };
+        }
 
-        pub fn bitand(a: U, b: U) U {
+        pub fn divi(a: I, b: I) Env.Error!I {
+            return std.math.divFloor(I, a, b) catch |e| switch (e) {
+                error.Overflow => Env.Error.VmIntegerOverflow,
+                error.DivisionByZero => Env.Error.VmDivideByZero,
+            };
+        }
+
+        pub fn mod(a: U, b: U) Env.Error!U {
+            if (b == 0) return Env.Error.VmDivideByZero;
+            return a % b;
+        }
+
+        pub fn bitand(a: U, b: U) Env.Error!U {
             return a & b;
         }
 
-        pub fn bitor(a: U, b: U) U {
+        pub fn bitor(a: U, b: U) Env.Error!U {
             return a | b;
         }
 
-        pub fn bitxor(a: U, b: U) U {
+        pub fn bitxor(a: U, b: U) Env.Error!U {
             return a ^ b;
         }
 
-        pub fn eq(a: U, b: U) bool {
+        pub fn eq(a: U, b: U) Env.Error!bool {
             return a == b;
         }
 
-        pub fn ne(a: U, b: U) bool {
+        pub fn ne(a: U, b: U) Env.Error!bool {
             return a != b;
+        }
+
+        pub fn eqz(a: U) Env.Error!bool {
+            return a == 0;
+        }
+
+        pub fn neg(a: I) Env.Error!I {
+            return std.math.negate(a) catch |e| switch (e) {
+                error.Overflow => error.VmIntegerOverflow,
+            };
         }
     };
 }
@@ -412,7 +477,7 @@ test "generated" {
     defer simple.deinit();
 
     inline for (comptime std.enums.values(Width)) |width| {
-        const ns = sized_unsigned_verifiers(width);
+        const ns = sized_verifiers(width);
         inline for (@typeInfo(ns).Struct.decls) |decl| {
             const function = @field(ns, decl.name);
             const op = @unionInit(Op, decl.name, width);

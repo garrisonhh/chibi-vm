@@ -28,6 +28,7 @@ pub const Error = error{
     VmStackOverflow,
     VmStackUnderflow,
     VmDivideByZero,
+    VmIntegerOverflow,
 };
 
 const State = struct {
@@ -237,7 +238,7 @@ fn dumpStack(env: *const Env) void {
         if (i == base) {
             std.debug.print("<base>\n", .{});
         }
-        std.debug.print("{} | {}\n", .{i, start[i]});
+        std.debug.print("{} | {}\n", .{ i, start[i] });
     }
     std.debug.print("\n", .{});
 }
@@ -456,18 +457,30 @@ fn generic_subs(comptime W: Width) type {
         fn divu(env: *Env, _: *State) Error!void {
             const b = try env.pop(U);
             const a = try env.pop(U);
-            try env.push(U, a / b);
+            const res = std.math.divFloor(U, a, b) catch |e| {
+                return switch (e) {
+                    error.DivisionByZero => Env.Error.VmDivideByZero,
+                };
+            };
+            try env.push(U, res);
         }
 
         fn divi(env: *Env, _: *State) Error!void {
             const b = try env.pop(I);
             const a = try env.pop(I);
-            try env.push(I, @divFloor(a, b));
+            const res = std.math.divFloor(I, a, b) catch |e| {
+                return switch (e) {
+                    error.Overflow => Env.Error.VmIntegerOverflow,
+                    error.DivisionByZero => Env.Error.VmDivideByZero,
+                };
+            };
+            try env.push(I, res);
         }
 
         fn mod(env: *Env, _: *State) Error!void {
             const b = try env.pop(U);
             const a = try env.pop(U);
+            if (b == 0) return Error.VmDivideByZero;
             try env.push(U, a % b);
         }
 
@@ -489,7 +502,11 @@ fn generic_subs(comptime W: Width) type {
         }
 
         fn neg(env: *Env, _: *State) Error!void {
-            try env.push(I, -try env.pop(I));
+            const val = try env.pop(I);
+            const res = std.math.negate(val) catch |e| switch (e) {
+                error.Overflow => return error.VmIntegerOverflow,
+            };
+            try env.push(I, res);
         }
 
         fn eq(env: *Env, _: *State) Error!void {
@@ -501,7 +518,7 @@ fn generic_subs(comptime W: Width) type {
         }
 
         fn eqz(env: *Env, _: *State) Error!void {
-            try env.push(bool, try env.pop(U) != 0);
+            try env.push(bool, try env.pop(U) == 0);
         }
 
         fn extend(env: *Env, _: *State) Error!void {

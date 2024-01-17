@@ -315,7 +315,6 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
             try b.op(.{ .constant = constant });
         },
         .@"var" => |obj| {
-
             if (ctx.locals.get(obj.name)) |local| {
                 try b.op(.{ .local = local.offset });
                 try b.op(.{ .load = .{
