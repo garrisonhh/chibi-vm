@@ -13,7 +13,6 @@
 //! specified vm which is also a goal.
 //!
 //! TODO tests still need to be implemented for:
-//! local
 //! zero
 //! copy
 //! jump
@@ -667,6 +666,36 @@ test "constant" {
             try simple.expect(Bytes, bytes);
             try simple.expectStackSize(0);
         }
+    }
+}
+
+test "local" {
+    const count = 256;
+
+    var prng = Prng.init(random_seed);
+
+    try simple.init();
+    defer simple.deinit();
+
+    for (0..count) |_| {
+        const offset = prng.random().int(i16);
+
+        var mod = try simple.build(&.{
+            Op{ .local = offset },
+        });
+        defer mod.deinit(ally);
+
+        try simple.run(&mod);
+
+        const base = @intFromPtr(simple.env.stack.base);
+        const expected = if (offset > 0) pos: {
+            break :pos base + @as(usize, @intCast(offset));
+        } else neg: {
+            break :neg base - @as(usize, @intCast(-offset));
+        };
+
+        try simple.expectStackSize(8);
+        try simple.expect(usize, expected);
     }
 }
 
