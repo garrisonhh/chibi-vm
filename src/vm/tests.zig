@@ -16,7 +16,6 @@
 //! halt (is there even a way to test halt?)
 //! label
 //! local
-//! load
 //! store
 //! zero
 //! copy
@@ -26,6 +25,7 @@
 //! call
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const ops = @import("ops.zig");
 const Width = ops.Width;
 const Op = ops.Op;
@@ -167,24 +167,40 @@ test "drop" {
 const Prng = std.rand.DefaultPrng;
 const random_seed = 0;
 
-fn generateRandom(prng: *Prng, comptime T: type) T {
+fn generateRandom(
+    arena_ally: Allocator,
+    prng: *Prng,
+    comptime T: type,
+) T {
     return switch (@typeInfo(T)) {
         .Bool => prng.random().boolean(),
         .Int => prng.random().int(T),
         .Array => |meta| array: {
             var array: T = undefined;
             for (&array) |*slot| {
-                slot.* = generateRandom(prng, meta.child);
+                slot.* = generateRandom(arena_ally, prng, meta.child);
             }
 
             break :array array;
         },
-        else => @compileError("generate random for type: " ++ @typeName(T)),
+        .Pointer => |meta| switch (meta.size) {
+            .One => sg: {
+                const ptr = try arena_ally.create(meta.child);
+                ptr.* = try generateRandom(arena_ally, prng, meta.child);
+                break :sg ptr;
+            },
+            else => @compileError("generate random pointer: " ++ @typeName(T))
+        },
+        else => @compileError("generate random: " ++ @typeName(T)),
     };
 }
 
 /// generates a whole bunch of random cases for a type, edge cases and all
-fn generatePrimitiveCases(comptime T: type, count: usize) ![]const T {
+fn generatePrimitiveCases(
+    arena_ally: Allocator,
+    comptime T: type,
+    count: usize,
+) ![]const T {
     var cases = std.ArrayList(T).init(ally);
     defer cases.deinit();
 
@@ -206,7 +222,7 @@ fn generatePrimitiveCases(comptime T: type, count: usize) ![]const T {
     // add random cases
     var prng = Prng.init(random_seed);
     for (0..count - cases.items.len) |_| {
-        try cases.append(generateRandom(&prng, T));
+        try cases.append(generateRandom(arena_ally, &prng, T));
     }
 
     return try cases.toOwnedSlice();
@@ -321,7 +337,11 @@ fn combinations(comptime N: comptime_int, k: usize) CombinationIterator(N) {
 ///
 /// due to combinations of args, count will be exponentiated by the number of
 /// fields in the args tuple (so keep it low-ish!)
-fn generateArgCases(comptime F: type, count: usize) ![]const CaseArgs(F) {
+fn generateArgCases(
+    arena_ally: Allocator,
+    comptime F: type,
+    count: usize,
+) ![]const CaseArgs(F) {
     const Args = CaseArgs(F);
     const ArgSlices = CaseArgSlices(F);
     const arg_count = @typeInfo(Args).Struct.fields.len;
@@ -330,7 +350,7 @@ fn generateArgCases(comptime F: type, count: usize) ![]const CaseArgs(F) {
     var slices: ArgSlices = undefined;
     inline for (0..arg_count) |i| {
         const T = @typeInfo(Args).Struct.fields[i].type;
-        slices[i] = try generatePrimitiveCases(T, count);
+        slices[i] = try generatePrimitiveCases(arena_ally, T, count);
     }
     defer {
         inline for (0..arg_count) |i| {
@@ -414,10 +434,14 @@ fn applyVerifier(
     comptime function: F,
     op: Op,
 ) !void {
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const arena_ally = arena.allocator();
+
     // generate test cases
     const count = 16;
     const cases = switch (@typeInfo(F).Fn.params.len) {
-        0...10 => try generateArgCases(F, count),
+        0...10 => try generateArgCases(arena_ally, F, count),
         else => unreachable,
     };
     defer ally.free(cases);
@@ -619,7 +643,11 @@ test "constant" {
         const Bytes = [comptime width.bytes()]u8;
 
         for (0..count) |_| {
-            const bytes = generateRandom(&prng, Bytes);
+            var arena = std.heap.ArenaAllocator.init(ally);
+            defer arena.deinit();
+            const arena_ally = arena.allocator();
+
+            const bytes = generateRandom(arena_ally, &prng, Bytes);
             const op = Op{
                 .constant = @unionInit(Op.Constant, @tagName(width), bytes),
             };
@@ -630,6 +658,54 @@ test "constant" {
             try simple.run(&mod);
             try simple.expectStackSize(8);
             try simple.expect(Bytes, bytes);
+            try simple.expectStackSize(0);
+        }
+    }
+}
+
+test "load" {
+    const data_len = 8192;
+    const count = 128;
+
+    try simple.init();
+    defer simple.deinit();
+
+    var prng = Prng.init(random_seed);
+
+    inline for (comptime std.enums.values(Width)) |width| {
+        const Bytes = [comptime width.bytes()]u8;
+
+        var arena = std.heap.ArenaAllocator.init(ally);
+        defer arena.deinit();
+        const arena_ally = arena.allocator();
+
+        // create some random bytes to retrieve some data from
+        const data = try arena_ally.alloc(u8, data_len);
+        prng.random().bytes(data);
+
+        // attempt to load from some random offsets
+        for (0..count) |_| {
+            const nbytes: u16 = width.bytes();
+            const rand_offset = prng.random().uintLessThan(u16, data_len);
+            const byte_offset = std.mem.alignBackward(u16, rand_offset, nbytes);
+            const offset = @divExact(byte_offset, nbytes);
+
+            const expected: *const Bytes = @ptrCast(data[byte_offset..]);
+
+            const op = Op{
+                .load = Op.Address{
+                    .width = width,
+                    .offset = offset,
+                },
+            };
+
+            var mod = try simple.build(&.{op});
+            defer mod.deinit(ally);
+
+            try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(data)));
+            try simple.run(&mod);
+            try simple.expectStackSize(8);
+            try simple.expect(Bytes, expected.*);
             try simple.expectStackSize(0);
         }
     }
