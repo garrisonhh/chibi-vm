@@ -255,6 +255,8 @@ fn run(env: *Env, state: *State) Error!void {
 }
 
 /// execute code more manually for debugging purposes
+///
+/// *this function does not add a call frame for you*
 pub fn execAdvanced(env: *Env, code: []const u8, start: usize) Error!void {
     var state = State{
         .code = code,

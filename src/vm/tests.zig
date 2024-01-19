@@ -13,14 +13,12 @@
 //! specified vm which is also a goal.
 //!
 //! TODO tests still need to be implemented for:
-//! label
 //! local
 //! zero
 //! copy
 //! jump
 //! jz
 //! jnz
-//! call
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -767,5 +765,50 @@ test "store" {
             const actual: *const Bytes = @ptrCast(data[byte_offset..byte_offset + nbytes]);
             try std.testing.expectEqual(input, actual.*);
         }
+    }
+}
+
+test "call, label, ret" {
+    const max_param_count = 256;
+
+    try simple.init();
+    defer simple.deinit();
+
+    var prng = Prng.init(random_seed);
+
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const arena_ally = arena.allocator();
+
+    const params = try generateRandom(arena_ally, &prng, [max_param_count]u64);
+
+    for (0..max_param_count) |num_params| {
+        var b = Builder.init(ally);
+        defer b.deinit();
+
+        const inner = try b.label();
+
+        // a valid function
+        try b.op(.{ .enter = 0 });
+        try b.op(.{ .constant = .{ .byte = .{42} } });
+        try b.op(.{ .ret = @intCast(num_params) });
+
+        // thunk at the end of the bytecode
+        try b.global(simple.func_name, .global, try b.label());
+        try b.op(.{ .label = inner });
+        try b.op(.call);
+
+        const obj = try b.build();
+        defer obj.deinit(ally);
+
+        var mod = try objects.link(ally, &.{obj});
+        defer mod.deinit(ally);
+
+        for (params[0..num_params]) |param| {
+            try simple.push(@TypeOf(param), param);
+        }
+        try simple.run(&mod);
+        try simple.expect(u8, 42);
+        try simple.expectStackSize(0);
     }
 }
