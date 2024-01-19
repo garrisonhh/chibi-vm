@@ -13,9 +13,7 @@
 //! specified vm which is also a goal.
 //!
 //! TODO tests still need to be implemented for:
-//! halt
-//! enter
-//! constant
+//! halt (is there even a way to test halt?)
 //! label
 //! local
 //! load
@@ -96,6 +94,12 @@ const simple = struct {
         return try env.pop(T);
     }
 
+    /// pop a value and expect its result
+    fn expect(comptime T: type, expected: T) !void {
+        const actual = try pop(T);
+        try std.testing.expectEqual(expected, actual);
+    }
+
     /// returns stack size in bytes
     fn getStackSize() usize {
         const size = @intFromPtr(env.stack.top) - @intFromPtr(env.stack.mem.ptr);
@@ -153,8 +157,8 @@ test "drop" {
     defer mod.deinit(ally);
 
     try simple.push(u64, 0);
+    try simple.expectStackSize(8);
     try simple.run(&mod);
-
     try simple.expectStackSize(0);
 }
 
@@ -167,6 +171,14 @@ fn generateRandom(prng: *Prng, comptime T: type) T {
     return switch (@typeInfo(T)) {
         .Bool => prng.random().boolean(),
         .Int => prng.random().int(T),
+        .Array => |meta| array: {
+            var array: T = undefined;
+            for (&array) |*slot| {
+                slot.* = generateRandom(prng, meta.child);
+            }
+
+            break :array array;
+        },
         else => @compileError("generate random for type: " ++ @typeName(T)),
     };
 }
@@ -564,8 +576,9 @@ fn generic_verifiers(comptime width: Width) type {
     };
 }
 
-// runs generated tests on all of the verifier namespaces
-test "generated" {
+// operators that transform values into an output value can all be automated
+// with very similar inputs
+test "transformation operators" {
     @setEvalBranchQuota(10_000);
 
     try simple.init();
@@ -590,6 +603,34 @@ test "generated" {
             const function = @field(ns, decl.name);
             const op = @unionInit(Op, decl.name, width);
             try applyVerifier(@TypeOf(function), function, op);
+        }
+    }
+}
+
+test "constant" {
+    const count = 64;
+
+    try simple.init();
+    defer simple.deinit();
+
+    var prng = Prng.init(random_seed);
+
+    inline for (comptime std.enums.values(Width)) |width| {
+        const Bytes = [comptime width.bytes()]u8;
+
+        for (0..count) |_| {
+            const bytes = generateRandom(&prng, Bytes);
+            const op = Op{
+                .constant = @unionInit(Op.Constant, @tagName(width), bytes),
+            };
+
+            var mod = try simple.build(&.{op});
+            defer mod.deinit(ally);
+
+            try simple.run(&mod);
+            try simple.expectStackSize(8);
+            try simple.expect(Bytes, bytes);
+            try simple.expectStackSize(0);
         }
     }
 }
