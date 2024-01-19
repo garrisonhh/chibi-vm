@@ -1,3 +1,32 @@
+//! testing for low level vm behavior.
+//!
+//! the goal here is that every opcode should match its intended behavior, and
+//! always produce an error instead of panicing, so basically enforcing as much
+//! runtime safety as is possible for a language at the level of C or Zig.
+//!
+//! errors produced by the vm should be treated as a kind of panic for the
+//! program running on the vm itself, users of the vm should be able to rely on
+//! it to produce a reasonable runtime error, and generate code that prevents
+//! these conditions if that is desired.
+//!
+//! duplicating the behavior here also acts as an important step towards a well
+//! specified vm which is also a goal.
+//!
+//! TODO tests still need to be implemented for:
+//! halt
+//! enter
+//! constant
+//! label
+//! local
+//! load
+//! store
+//! zero
+//! copy
+//! jump
+//! jz
+//! jnz
+//! call
+
 const std = @import("std");
 const ops = @import("ops.zig");
 const Width = ops.Width;
@@ -72,6 +101,17 @@ const simple = struct {
         const size = @intFromPtr(env.stack.top) - @intFromPtr(env.stack.mem.ptr);
         return size;
     }
+
+    fn expectStackSize(expected: usize) !void {
+        const stack_size = simple.getStackSize();
+        if (stack_size != expected) {
+            std.debug.print("stack size expected: {} actual {}\n", .{
+                expected,
+                stack_size,
+            });
+            return error.TestWrongStackSize;
+        }
+    }
 };
 
 // manually tweaked tests ======================================================
@@ -94,21 +134,28 @@ test "enter" {
         });
         defer mod.deinit(ally);
 
-        const expected = std.mem.alignForward(usize, reserve, 8);
-
         try simple.run(&mod);
 
-        const stack_size = simple.getStackSize();
-        if (stack_size != expected) {
-            std.debug.print("stack size expected: {} actual {}\n", .{
-                expected,
-                stack_size,
-            });
-            return error.TestWrongStackSize;
-        }
+        const expected = std.mem.alignForward(usize, reserve, 8);
+        try simple.expectStackSize(expected);
 
         simple.reset();
     }
+}
+
+test "drop" {
+    try simple.init();
+    defer simple.deinit();
+
+    var mod = try simple.build(&.{
+        .drop,
+    });
+    defer mod.deinit(ally);
+
+    try simple.push(u64, 0);
+    try simple.run(&mod);
+
+    try simple.expectStackSize(0);
 }
 
 // generated tests =============================================================
@@ -519,6 +566,8 @@ fn generic_verifiers(comptime width: Width) type {
 
 // runs generated tests on all of the verifier namespaces
 test "generated" {
+    @setEvalBranchQuota(10_000);
+
     try simple.init();
     defer simple.deinit();
 
@@ -526,8 +575,8 @@ test "generated" {
     inline for (@typeInfo(uvs).Struct.decls) |decl| {
         const function = @field(uvs, decl.name);
 
-        const opcode = std.meta.stringToEnum(Opcode, decl.name).?;
-        const op = switch (opcode) {
+        const opcode = comptime std.meta.stringToEnum(Opcode, decl.name).?;
+        const op = comptime switch (opcode) {
             .@"and", .@"or", .not => @unionInit(Op, decl.name, {}),
             else => unreachable,
         };
