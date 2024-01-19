@@ -15,7 +15,6 @@
 //! TODO tests still need to be implemented for:
 //! label
 //! local
-//! store
 //! zero
 //! copy
 //! jump
@@ -126,14 +125,14 @@ fn generateRandom(
     arena_ally: Allocator,
     prng: *Prng,
     comptime T: type,
-) T {
+) !T {
     return switch (@typeInfo(T)) {
         .Bool => prng.random().boolean(),
         .Int => prng.random().int(T),
         .Array => |meta| array: {
             var array: T = undefined;
             for (&array) |*slot| {
-                slot.* = generateRandom(arena_ally, prng, meta.child);
+                slot.* = try generateRandom(arena_ally, prng, meta.child);
             }
 
             break :array array;
@@ -177,7 +176,7 @@ fn generatePrimitiveCases(
     // add random cases
     var prng = Prng.init(random_seed);
     for (0..count - cases.items.len) |_| {
-        try cases.append(generateRandom(arena_ally, &prng, T));
+        try cases.append(try generateRandom(arena_ally, &prng, T));
     }
 
     return try cases.toOwnedSlice();
@@ -657,7 +656,7 @@ test "constant" {
             defer arena.deinit();
             const arena_ally = arena.allocator();
 
-            const bytes = generateRandom(arena_ally, &prng, Bytes);
+            const bytes = try generateRandom(arena_ally, &prng, Bytes);
             const op = Op{
                 .constant = @unionInit(Op.Constant, @tagName(width), bytes),
             };
@@ -717,6 +716,56 @@ test "load" {
             try simple.expectStackSize(8);
             try simple.expect(Bytes, expected.*);
             try simple.expectStackSize(0);
+        }
+    }
+}
+
+test "store" {
+    const data_len = 8192;
+    const count = 128;
+
+    try simple.init();
+    defer simple.deinit();
+
+    var prng = Prng.init(random_seed);
+
+    inline for (comptime std.enums.values(Width)) |width| {
+        const Bytes = [comptime width.bytes()]u8;
+
+        var arena = std.heap.ArenaAllocator.init(ally);
+        defer arena.deinit();
+        const arena_ally = arena.allocator();
+
+        // create some random bytes to retrieve some data from
+        const data = try arena_ally.alloc(u8, data_len);
+        prng.random().bytes(data);
+
+        // attempt to load from some random offsets
+        for (0..count) |_| {
+            const nbytes: u16 = width.bytes();
+            const rand_offset = prng.random().uintLessThan(u16, data_len);
+            const byte_offset = std.mem.alignBackward(u16, rand_offset, nbytes);
+            const offset = @divExact(byte_offset, nbytes);
+
+            const input = try generateRandom(arena_ally, &prng, Bytes);
+
+            const op = Op{
+                .store = Op.Address{
+                    .width = width,
+                    .offset = offset,
+                },
+            };
+
+            var mod = try simple.build(&.{op});
+            defer mod.deinit(ally);
+
+            try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(data)));
+            try simple.push(Bytes, input);
+            try simple.run(&mod);
+            try simple.expectStackSize(0);
+
+            const actual: *const Bytes = @ptrCast(data[byte_offset..byte_offset + nbytes]);
+            try std.testing.expectEqual(input, actual.*);
         }
     }
 }
