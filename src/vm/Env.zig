@@ -25,6 +25,7 @@ fn ptrAdd(comptime T: type, ptr: T, offset: isize) T {
 const Env = @This();
 
 pub const Error = error{
+    VmHalt,
     VmStackOverflow,
     VmStackUnderflow,
     VmDivideByZero,
@@ -253,8 +254,8 @@ fn run(env: *Env, state: *State) Error!void {
     }
 }
 
-/// execute raw bytecode from start address
-pub fn execBytecode(env: *Env, code: []const u8, start: usize) Error!void {
+/// execute code more manually for debugging purposes
+pub fn execAdvanced(env: *Env, code: []const u8, start: usize) Error!void {
     var state = State{
         .code = code,
         .pc = start,
@@ -266,7 +267,7 @@ pub const ExecError = Error || error{
     NoSuchFunction,
 };
 
-/// execute code exported from a module
+/// execute a function exported from a module
 pub fn exec(
     env: *Env,
     mod: *const Module,
@@ -337,8 +338,8 @@ const byte_subs = blk: {
 
 /// subroutines for opcodes which aren't generic over width
 const monomorphic_subs = struct {
-    fn halt(_: *Env, state: *State) Error!void {
-        state.pc = state.code.len;
+    fn halt(_: *Env, _: *State) Error!void {
+        return Error.VmHalt;
     }
 
     fn enter(env: *Env, state: *State) Error!void {

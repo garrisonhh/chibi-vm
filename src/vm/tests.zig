@@ -13,7 +13,6 @@
 //! specified vm which is also a goal.
 //!
 //! TODO tests still need to be implemented for:
-//! halt (is there even a way to test halt?)
 //! label
 //! local
 //! store
@@ -55,7 +54,7 @@ const simple = struct {
         defer builder.deinit();
 
         const lbl = try builder.label();
-        _ = try builder.global(func_name, .global, lbl);
+        try builder.global(func_name, .global, lbl);
 
         for (code) |o| {
             try builder.op(o);
@@ -79,7 +78,7 @@ const simple = struct {
 
     fn run(mod: *const Module) !void {
         const offset = mod.exports.get(func_name).?;
-        try env.execBytecode(mod.code, offset);
+        try env.execAdvanced(mod.code, offset);
     }
 
     fn reset() void {
@@ -118,51 +117,7 @@ const simple = struct {
     }
 };
 
-// manually tweaked tests ======================================================
-
-test "enter" {
-    try simple.init();
-    defer simple.deinit();
-
-    const cases = [_]u16{
-        0,
-        16,
-        22,
-        std.math.maxInt(u16),
-        std.math.maxInt(u16) - 1,
-    };
-
-    for (cases) |reserve| {
-        var mod = try simple.build(&.{
-            Op{ .enter = reserve },
-        });
-        defer mod.deinit(ally);
-
-        try simple.run(&mod);
-
-        const expected = std.mem.alignForward(usize, reserve, 8);
-        try simple.expectStackSize(expected);
-
-        simple.reset();
-    }
-}
-
-test "drop" {
-    try simple.init();
-    defer simple.deinit();
-
-    var mod = try simple.build(&.{
-        .drop,
-    });
-    defer mod.deinit(ally);
-
-    try simple.push(u64, 0);
-    try simple.expectStackSize(8);
-    try simple.run(&mod);
-    try simple.expectStackSize(0);
-}
-
-// generated tests =============================================================
+// test generation =============================================================
 
 const Prng = std.rand.DefaultPrng;
 const random_seed = 0;
@@ -293,7 +248,7 @@ fn CaseArgSlices(comptime F: type) type {
 
 fn CombinationIterator(comptime N: comptime_int) type {
     comptime {
-        if (N <= 0) @compileError("N must be more than zero");
+        if (N <= 0) @compileError("N must be greater than zero");
     }
 
     return struct {
@@ -484,6 +439,8 @@ fn applyVerifier(
     }
 }
 
+// =============================================================================
+
 const unique_verifiers = struct {
     pub fn @"and"(a: bool, b: bool) Env.Error!bool {
         return a and b;
@@ -602,7 +559,7 @@ fn generic_verifiers(comptime width: Width) type {
 
 // operators that transform values into an output value can all be automated
 // with very similar inputs
-test "transformation operators" {
+test "generated" {
     @setEvalBranchQuota(10_000);
 
     try simple.init();
@@ -629,6 +586,59 @@ test "transformation operators" {
             try applyVerifier(@TypeOf(function), function, op);
         }
     }
+}
+
+test "halt" {
+    try simple.init();
+    defer simple.deinit();
+
+    var mod = try simple.build(&.{.halt});
+    defer mod.deinit(ally);
+
+    const result = simple.run(&mod);
+    try std.testing.expectError(Env.Error.VmHalt, result);
+}
+
+test "enter" {
+    try simple.init();
+    defer simple.deinit();
+
+    const cases = [_]u16{
+        0,
+        16,
+        22,
+        std.math.maxInt(u16),
+        std.math.maxInt(u16) - 1,
+    };
+
+    for (cases) |reserve| {
+        var mod = try simple.build(&.{
+            Op{ .enter = reserve },
+        });
+        defer mod.deinit(ally);
+
+        try simple.run(&mod);
+
+        const expected = std.mem.alignForward(usize, reserve, 8);
+        try simple.expectStackSize(expected);
+
+        simple.reset();
+    }
+}
+
+test "drop" {
+    try simple.init();
+    defer simple.deinit();
+
+    var mod = try simple.build(&.{
+        .drop,
+    });
+    defer mod.deinit(ally);
+
+    try simple.push(u64, 0);
+    try simple.expectStackSize(8);
+    try simple.run(&mod);
+    try simple.expectStackSize(0);
 }
 
 test "constant" {

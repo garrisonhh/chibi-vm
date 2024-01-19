@@ -4,8 +4,8 @@ const objects = @import("objects.zig");
 const Label = objects.Builder.Label;
 
 pub const Opcode = enum(u6) {
+    /// unexpected end of execution
     halt = 0,
-
     /// reads a u16 for the stack size, and adds it to the stack pointer
     enter,
 
