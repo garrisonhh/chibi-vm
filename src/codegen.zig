@@ -61,12 +61,23 @@ fn lowerAddr(
     switch (node.data) {
         .assign => |args| {
             try lowerAddr(b, ctx, args[0]);
-            try lowerAddr(b, ctx, args[1]);
 
             const size = args[0].ty.?.size;
             std.debug.assert(size == args[1].ty.?.size);
 
-            try b.op(.{ .copy = @intCast(size) });
+            if (vm.Width.fromBytesExact(size)) |width| {
+                try lowerNode(b, ctx, args[1]);
+                try b.op(.{ .store = .{
+                    .width = width,
+                    .offset = 0,
+                } });
+
+                // TODO return ptr
+                try b.constant(u8, 0);
+            } else {
+                try lowerAddr(b, ctx, args[1]);
+                try b.op(.{ .copy = @intCast(size) });
+            }
         },
         .@"var" => |obj| {
             if (ctx.locals.get(obj.name)) |local| {

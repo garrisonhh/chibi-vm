@@ -49,14 +49,7 @@ fn run(ally: Allocator, source_paths: []const [:0]const u8) !void {
 
     const cwd = std.fs.cwd();
     for (source_paths, sources) |path, *source| {
-        const contents = try cwd.readFileAllocOptions(
-            arena_ally,
-            path,
-            std.math.maxInt(usize),
-            null,
-            @alignOf(u8),
-            0
-        );
+        const contents = try cwd.readFileAllocOptions(arena_ally, path, std.math.maxInt(usize), null, @alignOf(u8), 0);
 
         source.* = Source{
             .name = path,
@@ -84,6 +77,7 @@ fn run(ally: Allocator, source_paths: []const [:0]const u8) !void {
 
     const exit_code = try env.pop(i32);
     if (exit_code > 0) {
+        try stderr.print("exited unsuccessfully: {}\n", .{exit_code});
         const exit_code_byte = std.math.cast(u8, exit_code) orelse 1;
         std.process.exit(exit_code_byte);
     }
@@ -137,7 +131,7 @@ fn usage(choice: ?Args.Subcommand, msg: []const u8) noreturn {
 
     if (choice) |sub| {
         const meta = sub_usages.get(sub);
-        usagePrint("usage: {s} {s} {s}\n\n", .{exe, @tagName(sub), meta.interface});
+        usagePrint("usage: {s} {s} {s}\n\n", .{ exe, @tagName(sub), meta.interface });
         usagePrint("{s}\n", .{meta.help});
     } else {
         usagePrint(
@@ -147,13 +141,13 @@ fn usage(choice: ?Args.Subcommand, msg: []const u8) noreturn {
             \\
             \\subcommands:
             \\
-            ,
+        ,
             .{exe},
         );
 
         for (std.enums.values(Args.Subcommand)) |sub| {
             const meta = sub_usages.get(sub);
-            usagePrint("  {s}\t{s}\n", .{@tagName(sub), meta.help});
+            usagePrint("  {s}\t{s}\n", .{ @tagName(sub), meta.help });
         }
     }
 
@@ -185,7 +179,7 @@ fn parseArgs(ally: Allocator) !Args {
             break :run Args{ .run = .{
                 .source_paths = try source_paths.toOwnedSlice(),
             } };
-        }
+        },
     };
 }
 
