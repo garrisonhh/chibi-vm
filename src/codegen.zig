@@ -29,7 +29,12 @@ const Context = struct {
     }
 };
 
-fn unimplemented(comptime fmt: []const u8, args: anytype) !void {
+const UnimplementedError = error{Unimplemented};
+
+fn unimplemented(
+    comptime fmt: []const u8,
+    args: anytype,
+) UnimplementedError!void {
     std.debug.print("unimplemented: " ++ fmt ++ "\n", args);
     return error.Unimplemented;
 }
@@ -45,9 +50,24 @@ fn getIntSignedness(t: Type) std.builtin.Signedness {
 
 // lowering ====================================================================
 
+pub const Error = Allocator.Error || UnimplementedError;
+
 /// lower a node as its address (for lvalues, for example)
-fn lowerAddr(b: *Builder, ctx: *const Context, node: *const Node) !void {
+fn lowerAddr(
+    b: *Builder,
+    ctx: *const Context,
+    node: *const Node,
+) Error!void {
     switch (node.data) {
+        .assign => |args| {
+            try lowerAddr(b, ctx, args[0]);
+            try lowerAddr(b, ctx, args[1]);
+
+            const size = args[0].ty.?.size;
+            std.debug.assert(size == args[1].ty.?.size);
+
+            try b.op(.{ .copy = @intCast(size) });
+        },
         .@"var" => |obj| {
             if (ctx.locals.get(obj.name)) |local| {
                 try b.op(.{ .local = local.offset });
@@ -62,9 +82,16 @@ fn lowerAddr(b: *Builder, ctx: *const Context, node: *const Node) !void {
             }
         },
         .member => |access| {
-            try lowerAddr(b, ctx, access.child);
+            try lowerAddr(b, ctx, access.obj);
             try b.constant(u32, @as(u32, @intCast(access.member.offset)));
             try b.op(.{ .add = .half });
+        },
+        .deref => |deref| {
+            try lowerNode(b, ctx, deref.obj);
+            if (deref.member) |member| {
+                try b.constant(u32, @as(u32, @intCast(member.offset)));
+                try b.op(.{ .add = .half });
+            }
         },
         .cast => |child| {
             // this should always be a noop
@@ -77,11 +104,8 @@ fn lowerAddr(b: *Builder, ctx: *const Context, node: *const Node) !void {
     }
 }
 
-/// lower a node addr and then load the result
-fn lowerAddrLoad(b: *Builder, ctx: *const Context, node: *const Node) !void {
-    try lowerAddr(b, ctx, node);
-
-    if (Width.fromBytesFit(node.ty.?.size)) |width| {
+fn lowerLoad(b: *Builder, ty: *const Type) Error!void {
+    if (Width.fromBytesFit(ty.size)) |width| {
         try b.op(.{ .load = .{
             .width = width,
             .offset = 0,
@@ -91,10 +115,25 @@ fn lowerAddrLoad(b: *Builder, ctx: *const Context, node: *const Node) !void {
     }
 }
 
+/// lower a node addr and then load the result
+fn lowerAddrLoad(
+    b: *Builder,
+    ctx: *const Context,
+    node: *const Node,
+) Error!void {
+    try lowerAddr(b, ctx, node);
+    try lowerLoad(b, &node.ty.?);
+}
+
 /// lower a statement node or a node being read as a value
-fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
+fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
     switch (node.data) {
-        .@"var", .member => try lowerAddrLoad(b, ctx, node),
+        // addr load ops
+        .assign,
+        .deref,
+        .@"var",
+        .member,
+        => try lowerAddrLoad(b, ctx, node),
 
         // as far as I can tell, this returns void/undefined
         .null_expr => {
@@ -152,7 +191,7 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
             // in c, conditions return integers
             try b.op(.{ .extend = .byte });
         },
-        inline .deref, .expr_stmt, .@"return" => |child, tag| {
+        inline .expr_stmt, .@"return" => |child, tag| {
             try lowerNode(b, ctx, child);
 
             const op: Op = switch (comptime tag) {
@@ -166,15 +205,6 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
             };
 
             try b.op(op);
-        },
-        .assign => |args| {
-            try lowerAddr(b, ctx, args[0]);
-            try lowerAddr(b, ctx, args[1]);
-
-            const size = args[0].ty.?.size;
-            std.debug.assert(size == args[1].ty.?.size);
-
-            try b.op(.{ .copy = @intCast(size) });
         },
         .comma => |args| {
             try lowerNode(b, ctx, args[0]);

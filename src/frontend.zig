@@ -326,8 +326,13 @@ pub const Node = struct {
     };
 
     pub const MemberAccess = struct {
-        child: *Node,
+        obj: *Node,
         member: Member,
+    };
+
+    pub const Deref = struct {
+        obj: *Node,
+        member: ?Member,
     };
 
     pub const Funcall = struct {
@@ -357,7 +362,7 @@ pub const Node = struct {
         comma: [2]*Node,
         member: MemberAccess,
         addr,
-        deref: *Node,
+        deref: Deref,
         not,
         bitnot,
         logand,
@@ -397,7 +402,6 @@ pub const Node = struct {
         const data: Data = switch (node.kind) {
             // unary
             inline .neg,
-            .deref,
             .@"return",
             .cast,
             .expr_stmt,
@@ -471,8 +475,12 @@ pub const Node = struct {
                 .args = try fromChibiSlice(ally, node.args),
             } },
             .member => Data{ .member = .{
-                .child = try fromChibiAlloc(ally, node.lhs.?),
+                .obj = try fromChibiAlloc(ally, node.lhs.?),
                 .member = try Member.fromChibi(ally, node.member.?),
+            } },
+            .deref => Data{ .deref = .{
+                .obj = try fromChibiAlloc(ally, node.lhs.?),
+                .member = if (node.member) |m| try Member.fromChibi(ally, m) else null,
             } },
 
             inline else => |tag| @unionInit(Data, @tagName(tag), {}),
@@ -543,8 +551,14 @@ pub const Node = struct {
                         arg.dumpIndented("argument", level + 1);
                     }
                 },
+                Deref => {
+                    meta.obj.dumpIndented("of", level + 1);
+                    if (meta.member) |m| {
+                        m.dumpIndented(level + 1);
+                    }
+                },
                 MemberAccess => {
-                    meta.child.dumpIndented("of", level + 1);
+                    meta.obj.dumpIndented("of", level + 1);
                     meta.member.dumpIndented(level + 1);
                 },
                 Number => {

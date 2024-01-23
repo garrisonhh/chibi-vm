@@ -51,12 +51,14 @@ pub fn main() !void {
         \\    int b;
         \\};
         \\
-        \\int foo(char a, int b) {
+        \\int foo(char a, int b, struct S *out) {
         \\    struct S s = {
         \\        .a = a,
         \\        .b = b,
         \\    };
-        \\    return s.a + s.b;
+        \\    *out = s;
+        \\
+        \\    return out->a + out->b;
         \\}
         },
     };
@@ -67,8 +69,16 @@ pub fn main() !void {
     var env = try vm.Env.init(ally, .{});
     defer env.deinit(ally);
 
+    const S = extern struct {
+        a: c_char,
+        b: c_int,
+    };
+    var s: S = undefined;
+
     try env.push(i8, 11);
     try env.push(i32, 22);
+    try env.push(*S, &s);
     try env.exec(&mod, "foo");
     std.debug.print("foo -> {}\n", .{try env.pop(i32)});
+    std.debug.print("s: {}\n", .{s});
 }
