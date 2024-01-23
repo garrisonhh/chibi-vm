@@ -84,7 +84,6 @@ fn run(ally: Allocator, source_paths: []const [:0]const u8) !void {
 
     const exit_code = try env.pop(i32);
     if (exit_code > 0) {
-        try stderr.print("program exited unsuccessfully: {}\n", .{exit_code});
         const exit_code_byte = std.math.cast(u8, exit_code) orelse 1;
         std.process.exit(exit_code_byte);
     }
