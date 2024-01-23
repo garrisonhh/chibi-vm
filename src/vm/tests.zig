@@ -921,7 +921,40 @@ test "jnz" {
     }
 }
 
-test "label call" {
+test "label" {
+    const count = 8;
+
+    try simple.init();
+    defer simple.deinit();
+
+    for (0..count) |n| {
+        var b = Builder.init(ally);
+        defer b.deinit();
+
+        const dest = try b.backref();
+        try b.op(.{ .label = dest });
+        try b.op(.halt);
+
+        for (0..n) |_| {
+            try b.op(.halt);
+        }
+
+        b.resolve(dest);
+
+        var mod = try b.build();
+        defer mod.deinit(ally);
+
+        var state = Env.State{
+            .code = mod.code,
+            .pc = 0,
+        };
+        const res = simple.run(&state);
+        try std.testing.expectError(Env.Error.VmHalt, res);
+        try simple.expect(u32, 6 + @as(u32, @intCast(n)));
+    }
+}
+
+test "call" {
     try simple.init();
     defer simple.deinit();
 
