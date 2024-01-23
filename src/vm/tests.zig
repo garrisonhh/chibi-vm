@@ -13,7 +13,6 @@
 //! specified vm which is also a goal.
 //!
 //! TODO tests still need to be implemented for:
-//! ret
 //! zero
 //! copy
 
@@ -922,7 +921,7 @@ test "jnz" {
     }
 }
 
-test "call a label" {
+test "label call" {
     try simple.init();
     defer simple.deinit();
 
@@ -954,4 +953,51 @@ test "call a label" {
     };
     const frame = try simple.pop(Env.Frame);
     try std.testing.expectEqual(expected, frame);
+}
+
+test "ret" {
+    const max_params = std.math.maxInt(u8);
+
+    var prng = Prng.init(random_seed);
+
+    try simple.init();
+    defer simple.deinit();
+
+    inline for (comptime std.enums.values(Width)) |width| {
+        const I = simple.int(width);
+
+        for (0..max_params) |n| {
+            var b = Builder.init(ally);
+            defer b.deinit();
+
+            try b.constant(I, 42);
+            try b.op(.{ .ret = @intCast(n) });
+            try b.op(.halt);
+
+            var mod = try b.build();
+            defer mod.deinit(ally);
+
+            const start_pc: usize = std.math.maxInt(usize);
+            const start_base = simple.env.stack.base;
+            const start_top = simple.env.stack.top;
+
+            // fake params
+            for (0..n) |_| {
+                const val = prng.random().uintAtMost(u64, std.math.maxInt(u64));
+                try simple.push(u64, val);
+            }
+
+            var state = Env.State{
+                .code = mod.code,
+                .pc = start_pc,
+            };
+            try simple.env.call(&state, 0);
+            try simple.run(&state);
+
+            try simple.expect(u8, 42);
+            try std.testing.expectEqual(start_pc, state.pc);
+            try std.testing.expectEqual(start_base, simple.env.stack.base);
+            try std.testing.expectEqual(start_top, simple.env.stack.top);
+        }
+    }
 }

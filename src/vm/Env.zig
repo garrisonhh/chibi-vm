@@ -178,7 +178,7 @@ pub fn pop(env: *Env, comptime T: type) Error!T {
 }
 
 /// does the necessary stack and state twiddling for calling a function
-fn call(env: *Env, state: *State, dest: u32) Error!void {
+pub fn call(env: *Env, state: *State, dest: u32) Error!void {
     try env.push(Frame, Frame{
         .base = env.stack.base,
         .pc = state.pc,

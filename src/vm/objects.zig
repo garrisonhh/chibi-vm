@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const in_debug = @import("builtin").mode == .Debug;
 const ops = @import("ops.zig");
+const Width = ops.Width;
 const Op = ops.Op;
 const ByteOp = ops.ByteOp;
 
@@ -202,9 +203,9 @@ pub const Builder = struct {
         const ally = self.ally;
 
         // construct byteop
-        const width: ?ops.Width = switch (o) {
+        const width: ?Width = switch (o) {
             inline else => |meta| switch (@TypeOf(meta)) {
-                ops.Width, Op.Constant => meta,
+                Width, Op.Constant => meta,
                 Op.Address, Op.CondJmp => meta.width,
                 else => null,
             }
@@ -259,6 +260,22 @@ pub const Builder = struct {
 
         std.debug.assert(extra.len == byteop.extraBytes());
         try self.code.appendSlice(ally, extra.slice());
+    }
+
+    /// sugar for the constant op
+    pub fn constant(self: *Self, comptime T: type, value: T,) Allocator.Error!void {
+        const width = comptime Width.fromBytesFit(@sizeOf(T)) orelse {
+            @compileError(@typeName(T) ++ " is too large for constant");
+        };
+
+        var meta = @unionInit(Op.Constant, @tagName(width), undefined);
+        const slice: []u8 = switch (meta) {
+            inline else => |*arr| arr,
+        };
+        const data = std.mem.asBytes(&value);
+        @memcpy(slice, data);
+
+        try self.op(.{ .constant = meta });
     }
 };
 
