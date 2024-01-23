@@ -771,8 +771,6 @@ pub fn parse(ally: Allocator, source: Source) FrontendError![]const Object {
 
         const object = try Object.fromChibi(ally, chibi_obj);
         try objects.append(ally, object);
-
-        object.dump();
     }
 
     return try objects.toOwnedSlice(ally);
