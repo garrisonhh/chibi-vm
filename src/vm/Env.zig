@@ -32,7 +32,7 @@ pub const Error = error{
     VmIntegerOverflow,
 };
 
-const State = struct {
+pub const State = struct {
     /// loaded code
     code: []const u8,
     /// program counter
@@ -55,20 +55,20 @@ const State = struct {
     }
 };
 
-/// needed for function codegen
-pub const frame_size = Stack.aligned8Size(Stack.Frame);
+/// format of a call stack frame
+pub const Frame = struct {
+    /// how much space this takes on the stack
+    pub const aligned_size = Stack.aligned8Size(Frame);
+
+    base: [*]align(8) u8,
+    pc: usize,
+};
 
 /// operation stack
 const Stack = struct {
     mem: []align(8) u8,
     base: [*]align(8) u8,
     top: [*]align(8) u8,
-
-    /// saved execution frame of a previous call
-    const Frame = struct {
-        base: [*]align(8) u8,
-        pc: usize,
-    };
 
     fn init(mem: []align(8) u8) Stack {
         return Stack{
@@ -179,7 +179,7 @@ pub fn pop(env: *Env, comptime T: type) Error!T {
 
 /// does the necessary stack and state twiddling for calling a function
 fn call(env: *Env, state: *State, dest: u32) Error!void {
-    try env.push(Stack.Frame, Stack.Frame{
+    try env.push(Frame, Frame{
         .base = env.stack.base,
         .pc = state.pc,
     });
@@ -229,6 +229,7 @@ fn dumpNext(env: *const Env, state: State) void {
     std.debug.print("\n", .{});
 }
 
+/// dumps stack to stderr for debugging
 fn dumpStack(env: *const Env) void {
     const start: [*]const u64 = @ptrCast(env.stack.mem.ptr);
     const base = (@intFromPtr(env.stack.base) - @intFromPtr(start)) / 8;
@@ -244,25 +245,14 @@ fn dumpStack(env: *const Env) void {
     std.debug.print("\n", .{});
 }
 
-/// execute ops until halted
-fn run(env: *Env, state: *State) Error!void {
+/// execute ops until complete with state provided
+pub fn run(env: *Env, state: *State) Error!void {
     while (state.pc < state.code.len) {
         const byte = state.readByte();
         const sub = byte_subs[byte].?;
 
         try sub(env, state);
     }
-}
-
-/// execute code more manually for debugging purposes
-///
-/// *this function does not add a call frame for you*
-pub fn execAdvanced(env: *Env, code: []const u8, start: usize) Error!void {
-    var state = State{
-        .code = code,
-        .pc = start,
-    };
-    try env.run(&state);
 }
 
 pub const ExecError = Error || error{
@@ -279,8 +269,8 @@ pub fn exec(
         return ExecError.NoSuchFunction;
     };
 
-    // start in a halted state so that returning from the first function will
-    // halt execution
+    // add call frame from the end of the code so that execution stops cleanly
+    // when returning from the exported function
     var state = State{
         .code = mod.code,
         .pc = mod.code.len,
@@ -357,7 +347,7 @@ const monomorphic_subs = struct {
 
         // revert frame and pc
         env.stack.top = env.stack.base;
-        const frame = try env.pop(Stack.Frame);
+        const frame = try env.pop(Frame);
         env.stack.base = frame.base;
         state.pc = frame.pc;
 

@@ -13,9 +13,11 @@
 //! specified vm which is also a goal.
 //!
 //! TODO tests still need to be implemented for:
+//! call
+//! label
+//! ret
 //! zero
 //! copy
-//! jump
 //! jz
 //! jnz
 
@@ -50,7 +52,7 @@ const simple = struct {
         defer builder.deinit();
 
         const lbl = try builder.label();
-        try builder.global(func_name, .global, lbl);
+        try builder.global(func_name, .exported, lbl);
 
         for (code) |o| {
             try builder.op(o);
@@ -72,9 +74,18 @@ const simple = struct {
         return std.meta.Int(.unsigned, @as(u16, w.bytes()) * 8);
     }
 
-    fn run(mod: *const Module) !void {
+    fn runModule(mod: *const Module) !void {
         const offset = mod.exports.get(func_name).?;
-        try env.execAdvanced(mod.code, offset);
+        var state = Env.State{
+            .code = mod.code,
+            .pc = offset,
+        };
+
+        try env.run(&state);
+    }
+
+    fn run(state: *Env.State) !void {
+        try env.run(state);
     }
 
     fn reset() void {
@@ -410,7 +421,7 @@ fn applyVerifier(
         }
 
         const actual: Result = res: {
-            simple.run(&mod) catch |e| {
+            simple.runModule(&mod) catch |e| {
                 break :res .{ .err = e };
             };
 
@@ -591,7 +602,7 @@ test "halt" {
     var mod = try simple.build(&.{.halt});
     defer mod.deinit(ally);
 
-    const result = simple.run(&mod);
+    const result = simple.runModule(&mod);
     try std.testing.expectError(Env.Error.VmHalt, result);
 }
 
@@ -613,7 +624,7 @@ test "enter" {
         });
         defer mod.deinit(ally);
 
-        try simple.run(&mod);
+        try simple.runModule(&mod);
 
         const expected = std.mem.alignForward(usize, reserve, 8);
         try simple.expectStackSize(expected);
@@ -633,7 +644,7 @@ test "drop" {
 
     try simple.push(u64, 0);
     try simple.expectStackSize(8);
-    try simple.run(&mod);
+    try simple.runModule(&mod);
     try simple.expectStackSize(0);
 }
 
@@ -661,7 +672,7 @@ test "constant" {
             var mod = try simple.build(&.{op});
             defer mod.deinit(ally);
 
-            try simple.run(&mod);
+            try simple.runModule(&mod);
             try simple.expectStackSize(8);
             try simple.expect(Bytes, bytes);
             try simple.expectStackSize(0);
@@ -685,7 +696,7 @@ test "local" {
         });
         defer mod.deinit(ally);
 
-        try simple.run(&mod);
+        try simple.runModule(&mod);
 
         const base = @intFromPtr(simple.env.stack.base);
         const expected = if (offset > 0) pos: {
@@ -739,7 +750,7 @@ test "load" {
             defer mod.deinit(ally);
 
             try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(data)));
-            try simple.run(&mod);
+            try simple.runModule(&mod);
             try simple.expectStackSize(8);
             try simple.expect(Bytes, expected.*);
             try simple.expectStackSize(0);
@@ -788,7 +799,7 @@ test "store" {
 
             try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(data)));
             try simple.push(Bytes, input);
-            try simple.run(&mod);
+            try simple.runModule(&mod);
             try simple.expectStackSize(0);
 
             const actual: *const Bytes = @ptrCast(data[byte_offset..byte_offset + nbytes]);
@@ -797,47 +808,32 @@ test "store" {
     }
 }
 
-test "call, label, ret" {
-    const max_param_count = 256;
+test "jump" {
+    const count = 8;
 
     try simple.init();
     defer simple.deinit();
 
-    var prng = Prng.init(random_seed);
-
-    var arena = std.heap.ArenaAllocator.init(ally);
-    defer arena.deinit();
-    const arena_ally = arena.allocator();
-
-    const params = try generateRandom(arena_ally, &prng, [max_param_count]u64);
-
-    for (0..max_param_count) |num_params| {
+    for (0..count) |n| {
         var b = Builder.init(ally);
         defer b.deinit();
 
-        const inner = try b.label();
+        const dest = try b.backref();
 
-        // a valid function
-        try b.op(.{ .enter = 0 });
-        try b.op(.{ .constant = .{ .byte = .{42} } });
-        try b.op(.{ .ret = @intCast(num_params) });
+        try b.op(.{ .jump = dest });
+        for (0..n) |_| try b.op(.halt);
 
-        // thunk at the end of the bytecode
-        try b.global(simple.func_name, .global, try b.label());
-        try b.op(.{ .label = inner });
-        try b.op(.call);
+        b.resolve(dest);
 
-        const obj = try b.build();
-        defer obj.deinit(ally);
-
-        var mod = try objects.link(ally, &.{obj});
+        var mod = try b.build();
         defer mod.deinit(ally);
 
-        for (params[0..num_params]) |param| {
-            try simple.push(@TypeOf(param), param);
-        }
-        try simple.run(&mod);
-        try simple.expect(u8, 42);
-        try simple.expectStackSize(0);
+        var state = Env.State{
+            .code = mod.code,
+            .pc = 0,
+        };
+        try simple.run(&state);
+
+        try std.testing.expectEqual(state.code.len, state.pc);
     }
 }

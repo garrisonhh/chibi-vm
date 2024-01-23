@@ -237,10 +237,10 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
                 try lowerNode(b, ctx, meta.then);
                 try b.op(.{ .jump = end });
 
-                try b.resolve(else_branch);
+                b.resolve(else_branch);
                 try lowerNode(b, ctx, @"else");
 
-                try b.resolve(end);
+                b.resolve(end);
             } else {
                 const end = try b.backref();
 
@@ -251,7 +251,7 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
                 } });
 
                 try lowerNode(b, ctx, meta.then);
-                try b.resolve(end);
+                b.resolve(end);
             }
         },
         .@"for" => |meta| {
@@ -262,7 +262,7 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
                 try lowerNode(b, ctx, n);
             }
 
-            try b.resolve(start);
+            b.resolve(start);
 
             if (meta.cond) |cond| {
                 try lowerNode(b, ctx, cond);
@@ -279,7 +279,7 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
             }
 
             try b.op(.{ .jump = start });
-            try b.resolve(end);
+            b.resolve(end);
         },
         .funcall => |fc| {
             for (fc.args) |*arg| {
@@ -354,7 +354,7 @@ fn lowerFunction(
     defer ctx.deinit(b.ally);
 
     // params are pushed in order below the stack frame
-    const param_fat_size = func.params.len * 8 + vm.Env.frame_size;
+    const param_fat_size = func.params.len * 8 + vm.Env.Frame.aligned_size;
 
     var param_offset = -@as(i16, @intCast(param_fat_size));
     for (func.params) |param| {
@@ -396,7 +396,7 @@ fn lowerFunction(
 
     // write code
     // TODO respect static functions with ns vvv
-    try b.global(name, .global, try b.label());
+    try b.global(name, .exported, try b.label());
     try b.op(.{ .enter = stack_size });
 
     for (func.body) |node| {

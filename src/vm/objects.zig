@@ -45,7 +45,7 @@ pub const Builder = struct {
     const Self = @This();
 
     const Global = struct {
-        const Namespace = enum { module, global };
+        const Namespace = enum { module, exported };
 
         ns: Namespace,
         label: Label,
@@ -182,7 +182,7 @@ pub const Builder = struct {
     }
 
     /// resolve a backref
-    pub fn resolve(self: *Self, lbl: Label) Allocator.Error!void {
+    pub fn resolve(self: *Self, lbl: Label) void {
         if (in_debug and self.labels.items[lbl.index] != null) {
             std.debug.panic("tried to resolve lbl twice: {}", .{lbl});
         }
@@ -193,7 +193,7 @@ pub const Builder = struct {
     /// create and resolve a label
     pub fn label(self: *Self) Allocator.Error!Label {
         const lbl = try self.backref();
-        try self.resolve(lbl);
+        self.resolve(lbl);
         return lbl;
     }
 
