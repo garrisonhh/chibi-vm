@@ -45,21 +45,18 @@ pub fn main() !void {
 
     // interpret sources
     var sources = [_]Source{
-        .{ .name = "test_file", .contents = 
-        \\int fib(int x) {
-        \\  if (x == 0) {
-        \\    return 1;
-        \\  } else if (x == 1) {
-        \\    return 1;
-        \\  }
+        .{ .name = "test_file", .contents =
+        \\struct S {
+        \\    char a;
+        \\    int b;
+        \\};
         \\
-        \\  return fib(x - 1) + fib(x - 2);
-        \\}
-        \\
-        \\int strlen(const char *str) {
-        \\  const char *trav;
-        \\  for (trav = str; *trav; trav = trav + 1);
-        \\  return trav - str;
+        \\int foo(char a, int b) {
+        \\    struct S s = {
+        \\        .a = a,
+        \\        .b = b,
+        \\    };
+        \\    return s.a + s.b;
         \\}
         },
     };
@@ -70,15 +67,5 @@ pub fn main() !void {
     var env = try vm.Env.init(ally, .{});
     defer env.deinit(ally);
 
-    for (0..15) |n| {
-        try env.push(i32, @as(i32, @intCast(n)));
-        try env.exec(&mod, "fib");
-        std.debug.print("fib({}) = {}\n", .{ n, try env.pop(i32) });
-    }
-
-    const CStr = *const [*:0]u8;
-    const str = "hello, world!";
-    try env.push(CStr, @as(CStr, @alignCast(@ptrCast(str))));
-    try env.exec(&mod, "strlen");
-    std.debug.print("strlen(\"{s}\") = {}\n", .{ str, try env.pop(i32) });
+    try env.exec(&mod, "foo");
 }

@@ -41,6 +41,11 @@ fn iterateChibi(comptime T: type, list: ?*T) ChibiIterator(T) {
     return .{ .trav = list };
 }
 
+fn chibiTokenStr(name: ?*chibi.Token) ?[]const u8 {
+    const tok = name orelse return null;
+    return tok.loc[0..@intCast(tok.len)];
+}
+
 // zig data structures =========================================================
 
 pub const Source = struct {
@@ -68,6 +73,12 @@ pub const Type = struct {
         returns: *Self,
     };
 
+    pub const Field = struct {
+        name: ?[]const u8,
+        type: *Self,
+        offset: usize,
+    };
+
     pub const Data = union(chibi.TypeKind) {
         void,
         bool,
@@ -83,7 +94,7 @@ pub const Type = struct {
         func: Func,
         array,
         vla,
-        @"struct",
+        @"struct": []const Field,
         @"union",
     };
 
@@ -93,10 +104,6 @@ pub const Type = struct {
     data: Data,
 
     fn fromChibi(ally: Allocator, ty: *chibi.Type) Allocator.Error!Self {
-        const name: ?[]const u8 = if (ty.name) |name| name: {
-            break :name name.loc[0..@intCast(name.len)];
-        } else null;
-
         const data = switch (ty.kind) {
             inline .void,
             .bool,
@@ -138,6 +145,25 @@ pub const Type = struct {
                     .returns = returns,
                 } };
             },
+            .@"struct" => st: {
+                const nmembers = countChibi(chibi.Member, ty.members);
+                const fields = try ally.alloc(Field, nmembers);
+
+                var i: usize = 0;
+                var iter = iterateChibi(chibi.Member, ty.members);
+                while (iter.next()) |member| : (i += 1) {
+                    const field_name = chibiTokenStr(member.name);
+                    const field_type = try fromChibiAlloc(ally, member.ty);
+
+                    fields[i] = Field{
+                        .name = field_name,
+                        .type = field_type,
+                        .offset = @intCast(member.offset),
+                    };
+                }
+
+                break :st Data{ .@"struct" = fields };
+            },
 
             inline else => |type_kind| @unionInit(
                 Data,
@@ -147,7 +173,7 @@ pub const Type = struct {
         };
 
         return Self{
-            .name = name,
+            .name = chibiTokenStr(ty.name),
             .size = @intCast(ty.size),
             .alignment = @intCast(ty.@"align"),
             .data = data,
@@ -232,6 +258,16 @@ pub const Type = struct {
                     try writer.print("{}", .{param});
                 }
                 try writer.print(") {}", .{func.returns});
+            },
+            .@"struct" => |fields| {
+                try writer.writeAll("struct { ");
+                for (fields) |field| {
+                    if (field.name) |name| {
+                        try writer.print("{s}: ", .{name});
+                    }
+                    try writer.print("{}; ", .{field.type});
+                }
+                try writer.print("}}", .{});
             },
 
             else => @panic("TODO"),

@@ -250,7 +250,7 @@ pub const Member = extern struct {
     next: ?*Member,
     ty: *Type,
     tok: *Token,
-    name: *Token,
+    name: ?*Token,
     idx: c_int,
     @"align": c_int,
     offset: c_int,
