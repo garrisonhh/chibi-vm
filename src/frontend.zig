@@ -53,6 +53,43 @@ pub const Source = struct {
     contents: [:0]const u8,
 };
 
+pub const Member = struct {
+    const Self = @This();
+
+    name: ?[]const u8,
+    type: *Type,
+    offset: usize,
+
+    fn fromChibi(ally: Allocator, member: *chibi.Member) Allocator.Error!Self {
+        const name = chibiTokenStr(member.name);
+        const ty = try Type.fromChibiAlloc(ally, member.ty);
+
+        return Self{
+            .name = name,
+            .type = ty,
+            .offset = @intCast(member.offset),
+        };
+    }
+
+    fn fromChibiAlloc(
+        ally: Allocator,
+        member: *chibi.Member,
+    ) Allocator.Error!*Self {
+        const ptr = try ally.create(Self);
+        ptr.* = fromChibi(ally, member);
+        return ptr;
+    }
+
+    fn dumpIndented(self: Self, level: u32) void {
+        for (0..level * 2) |_| std.debug.print(" ", .{});
+        std.debug.print("(+{d}) ", .{self.offset});
+        if (self.name) |name| {
+            std.debug.print("{s}: ", .{name});
+        }
+        std.debug.print("{}\n", .{self.type});
+    }
+};
+
 /// a more easy to work with chibi type
 ///
 /// chibi types are each individually heap-allocated trees, so this mirrors
@@ -73,12 +110,6 @@ pub const Type = struct {
         returns: *Self,
     };
 
-    pub const Field = struct {
-        name: ?[]const u8,
-        type: *Self,
-        offset: usize,
-    };
-
     pub const Data = union(chibi.TypeKind) {
         void,
         bool,
@@ -94,7 +125,7 @@ pub const Type = struct {
         func: Func,
         array,
         vla,
-        @"struct": []const Field,
+        @"struct": []const Member,
         @"union",
     };
 
@@ -147,22 +178,15 @@ pub const Type = struct {
             },
             .@"struct" => st: {
                 const nmembers = countChibi(chibi.Member, ty.members);
-                const fields = try ally.alloc(Field, nmembers);
+                const members = try ally.alloc(Member, nmembers);
 
                 var i: usize = 0;
                 var iter = iterateChibi(chibi.Member, ty.members);
                 while (iter.next()) |member| : (i += 1) {
-                    const field_name = chibiTokenStr(member.name);
-                    const field_type = try fromChibiAlloc(ally, member.ty);
-
-                    fields[i] = Field{
-                        .name = field_name,
-                        .type = field_type,
-                        .offset = @intCast(member.offset),
-                    };
+                    members[i] = try Member.fromChibi(ally, member);
                 }
 
-                break :st Data{ .@"struct" = fields };
+                break :st Data{ .@"struct" = members };
             },
 
             inline else => |type_kind| @unionInit(
@@ -301,6 +325,11 @@ pub const Node = struct {
         float: f64,
     };
 
+    pub const MemberAccess = struct {
+        child: *Node,
+        member: Member,
+    };
+
     pub const Funcall = struct {
         func: *Node,
         args: []const Node,
@@ -326,7 +355,7 @@ pub const Node = struct {
         assign: [2]*Node,
         cond,
         comma: [2]*Node,
-        member,
+        member: MemberAccess,
         addr,
         deref: *Node,
         not,
@@ -441,6 +470,10 @@ pub const Node = struct {
                 .func = try fromChibiAlloc(ally, node.lhs.?),
                 .args = try fromChibiSlice(ally, node.args),
             } },
+            .member => Data{ .member = .{
+                .child = try fromChibiAlloc(ally, node.lhs.?),
+                .member = try Member.fromChibi(ally, node.member.?),
+            } },
 
             inline else => |tag| @unionInit(Data, @tagName(tag), {}),
         };
@@ -509,6 +542,10 @@ pub const Node = struct {
                     for (meta.args) |arg| {
                         arg.dumpIndented("argument", level + 1);
                     }
+                },
+                MemberAccess => {
+                    meta.child.dumpIndented("of", level + 1);
+                    meta.member.dumpIndented(level + 1);
                 },
                 Number => {
                     for (0..(level + 1) * 2) |_| std.debug.print(" ", .{});
