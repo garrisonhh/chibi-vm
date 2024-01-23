@@ -65,12 +65,14 @@ pub const Opcode = enum(u6) {
     // 2. pops pointer
     // 3. derefs `width` bytes at `pointer + offset * width` and pushes
     // (this arrived unintentionaly super close to the design of x86 mov!)
+    // TODO allow ptr to pass through
     load,
     // 1. reads offset as u16 from bytecode
     // 2. pops data
     // 3. pops pointer
     // 4. writes `width` bytes at `pointer + offset * width`
     // (this arrived unintentionaly super close to the design of x86 mov!)
+    // TODO allow ptr to pass through
     store,
 
     /// reads u32 length, peeks `dst` ptr and writes zeroes to it

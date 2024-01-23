@@ -139,12 +139,12 @@ fn lowerAddrLoad(
 /// lower a statement node or a node being read as a value
 fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
     switch (node.data) {
-        // addr load ops
         .assign,
         .deref,
         .@"var",
         .member,
         => try lowerAddrLoad(b, ctx, node),
+        .addr => |child| try lowerAddr(b, ctx, child),
 
         // as far as I can tell, this returns void/undefined
         .null_expr => {

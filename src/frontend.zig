@@ -361,7 +361,7 @@ pub const Node = struct {
         cond,
         comma: [2]*Node,
         member: MemberAccess,
-        addr,
+        addr: *Node,
         deref: Deref,
         not,
         bitnot,
@@ -406,6 +406,7 @@ pub const Node = struct {
             .cast,
             .expr_stmt,
             .stmt_expr,
+            .addr,
             => |tag| @unionInit(
                 Data,
                 @tagName(tag),
