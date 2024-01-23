@@ -803,6 +803,45 @@ test "store" {
     }
 }
 
+test "zero" {
+    const count = 128;
+
+    try simple.init();
+    defer simple.deinit();
+
+    var prng = Prng.init(random_seed);
+
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const arena_ally = arena.allocator();
+
+    const data_lengths = try generatePrimitiveCases(arena_ally, u16, count);
+    defer ally.free(data_lengths);
+
+    for (data_lengths) |data_len| {
+        const data = try ally.alloc(u8, data_len);
+        defer ally.free(data);
+        prng.random().bytes(data);
+
+        var mod = try simple.build(&.{
+            .{ .zero = data_len },
+        });
+        defer mod.deinit(ally);
+
+        const data_ptr: *anyopaque = @ptrCast(data);
+        try simple.push(*anyopaque, data_ptr);
+        try simple.runModule(&mod);
+        try simple.expect(*anyopaque, data_ptr);
+        try simple.expectStackSize(0);
+
+        for (data) |byte| {
+            if (byte != 0) {
+                return error.TestFailure;
+            }
+        }
+    }
+}
+
 test "jump" {
     const count = 8;
 
