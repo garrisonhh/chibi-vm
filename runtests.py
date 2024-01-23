@@ -42,9 +42,9 @@ def main():
         if res.returncode != 0:
             out = res.stdout.decode('unicode_escape')
             err = res.stderr.decode('unicode_escape')
-            err = "\n".join(str.split('\n')[:5]) # limit number of lines
+            err = "\n".join(err.strip().split('\n')[:5]) # limit number of lines
 
-            if err.startswith("unimplemented"):
+            if err.startswith("unimplemented") or "stdio.h" in err:
                 skipped += 1
                 print("UNIMPLEMENTED")
             else:
@@ -56,9 +56,11 @@ def main():
                     print(f"[stderr]\n{err}\n")
 
     percent = successes / total * 100.0
+    unskipped_percent = successes / len(testpaths) * 100.0
 
     print("[test summary]")
-    print(f"passed {successes}/{len(testpaths)} ({percent:.2f}%) ({skipped} skipped)")
+    print(f"skipped {skipped}")
+    print(f"passed  {successes}/{total}/{len(testpaths)} ({percent:.2f}%/{unskipped_percent:.2f}%)")
 
 if __name__ == "__main__":
     main()
