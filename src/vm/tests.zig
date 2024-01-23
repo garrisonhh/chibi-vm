@@ -11,10 +11,6 @@
 //!
 //! duplicating the behavior here also acts as an important step towards a well
 //! specified vm which is also a goal.
-//!
-//! TODO tests still need to be implemented for:
-//! zero
-//! copy
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -146,7 +142,7 @@ fn generateRandom(
                 ptr.* = try generateRandom(arena_ally, prng, meta.child);
                 break :sg ptr;
             },
-            else => @compileError("generate random pointer: " ++ @typeName(T))
+            else => @compileError("generate random pointer: " ++ @typeName(T)),
         },
         else => @compileError("generate random: " ++ @typeName(T)),
     };
@@ -797,9 +793,48 @@ test "store" {
             try simple.runModule(&mod);
             try simple.expectStackSize(0);
 
-            const actual: *const Bytes = @ptrCast(data[byte_offset..byte_offset + nbytes]);
+            const actual: *const Bytes = @ptrCast(data[byte_offset .. byte_offset + nbytes]);
             try std.testing.expectEqual(input, actual.*);
         }
+    }
+}
+
+test "copy" {
+    const count = 128;
+
+    try simple.init();
+    defer simple.deinit();
+
+    var prng = Prng.init(random_seed);
+
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const arena_ally = arena.allocator();
+
+    const data_lengths = try generatePrimitiveCases(arena_ally, u16, count);
+    defer ally.free(data_lengths);
+
+    for (data_lengths) |data_len| {
+        const data = try ally.alloc(u8, data_len);
+        defer ally.free(data);
+        prng.random().bytes(data);
+
+        const dest = try ally.alloc(u8, data_len);
+        defer ally.free(dest);
+
+        var mod = try simple.build(&.{
+            .{ .copy = data_len },
+        });
+        defer mod.deinit(ally);
+
+        const data_ptr: *anyopaque = @ptrCast(data);
+        try simple.push(*anyopaque, data_ptr);
+        try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(dest)));
+        try simple.runModule(&mod);
+        try simple.expect(*anyopaque, data_ptr);
+        try simple.expectStackSize(0);
+
+        try std.testing.expectEqualSlices(u8, data, dest);
     }
 }
 
@@ -884,10 +919,7 @@ test "jz" {
 
         const dest = try b.backref();
 
-        try b.op(.{ .jz = .{
-            .width = .byte,
-            .dest = dest
-        } });
+        try b.op(.{ .jz = .{ .width = .byte, .dest = dest } });
         try b.op(.halt);
 
         b.resolve(dest);
@@ -928,10 +960,7 @@ test "jnz" {
 
         const dest = try b.backref();
 
-        try b.op(.{ .jnz = .{
-            .width = .byte,
-            .dest = dest
-        } });
+        try b.op(.{ .jnz = .{ .width = .byte, .dest = dest } });
         try b.op(.halt);
 
         b.resolve(dest);

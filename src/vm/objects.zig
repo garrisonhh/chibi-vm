@@ -208,7 +208,7 @@ pub const Builder = struct {
                 Width, Op.Constant => meta,
                 Op.Address, Op.CondJmp => meta.width,
                 else => null,
-            }
+            },
         };
 
         const byteop = ByteOp{
@@ -263,7 +263,11 @@ pub const Builder = struct {
     }
 
     /// sugar for the constant op
-    pub fn constant(self: *Self, comptime T: type, value: T,) Allocator.Error!void {
+    pub fn constant(
+        self: *Self,
+        comptime T: type,
+        value: T,
+    ) Allocator.Error!void {
         const width = comptime Width.fromBytesFit(@sizeOf(T)) orelse {
             @compileError(@typeName(T) ++ " is too large for constant");
         };
