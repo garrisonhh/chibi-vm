@@ -18,8 +18,6 @@
 //! ret
 //! zero
 //! copy
-//! jz
-//! jnz
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -835,5 +833,93 @@ test "jump" {
         try simple.run(&state);
 
         try std.testing.expectEqual(state.code.len, state.pc);
+    }
+}
+
+test "jz" {
+    try simple.init();
+    defer simple.deinit();
+
+    var b = Builder.init(ally);
+    defer b.deinit();
+
+    inline for (comptime std.enums.values(Width)) |width| {
+        const I = simple.int(width);
+
+        const dest = try b.backref();
+
+        try b.op(.{ .jz = .{
+            .width = .byte,
+            .dest = dest
+        } });
+        try b.op(.halt);
+
+        b.resolve(dest);
+        try b.op(.halt);
+
+        var mod = try b.build();
+        defer mod.deinit(ally);
+
+        for (0..2) |n| {
+            try simple.push(I, @as(I, @intCast(n)));
+
+            var state = Env.State{
+                .code = mod.code,
+                .pc = 0,
+            };
+            const res = simple.run(&state);
+            try std.testing.expectError(Env.Error.VmHalt, res);
+
+            const expected: usize = switch (n) {
+                0 => mod.code.len,
+                1 => mod.code.len - 1,
+                else => unreachable,
+            };
+            try std.testing.expectEqual(expected, state.pc);
+        }
+    }
+}
+
+test "jnz" {
+    try simple.init();
+    defer simple.deinit();
+
+    var b = Builder.init(ally);
+    defer b.deinit();
+
+    inline for (comptime std.enums.values(Width)) |width| {
+        const I = simple.int(width);
+
+        const dest = try b.backref();
+
+        try b.op(.{ .jnz = .{
+            .width = .byte,
+            .dest = dest
+        } });
+        try b.op(.halt);
+
+        b.resolve(dest);
+        try b.op(.halt);
+
+        var mod = try b.build();
+        defer mod.deinit(ally);
+
+        for (0..2) |n| {
+            try simple.push(I, @as(I, @intCast(n)));
+
+            var state = Env.State{
+                .code = mod.code,
+                .pc = 0,
+            };
+            const res = simple.run(&state);
+            try std.testing.expectError(Env.Error.VmHalt, res);
+
+            const expected: usize = switch (n) {
+                0 => mod.code.len - 1,
+                1 => mod.code.len,
+                else => unreachable,
+            };
+            try std.testing.expectEqual(expected, state.pc);
+        }
     }
 }
