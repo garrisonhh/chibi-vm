@@ -336,6 +336,16 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
             try b.op(.{ .jump = start });
             b.resolve(end);
         },
+        .do => |meta| {
+            const start = try b.label();
+
+            try lowerNode(b, ctx, meta.body);
+            try lowerNode(b, ctx, meta.cond);
+            try b.op(.{ .jnz = .{
+                .width = Width.fromBytesFit(meta.cond.ty.?.size).?,
+                .dest = start,
+            } });
+        },
         .funcall => |fc| {
             for (fc.args) |*arg| {
                 try lowerNode(b, ctx, arg);

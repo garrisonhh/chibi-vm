@@ -320,6 +320,11 @@ pub const Node = struct {
         body: *Node,
     };
 
+    pub const Do = struct {
+        body: *Node,
+        cond: *Node,
+    };
+
     pub const Number = union(enum) {
         int: u64,
         float: f64,
@@ -370,7 +375,7 @@ pub const Node = struct {
         @"return": *Node,
         @"if": If,
         @"for": For,
-        do,
+        do: Do,
         @"switch",
         case,
         block: []const Node,
@@ -458,6 +463,12 @@ pub const Node = struct {
                     .cond = if (node.cond) |n| try fromChibiAlloc(ally, n) else null,
                     .iter = if (node.inc) |n| try fromChibiAlloc(ally, n) else null,
                     .body = try fromChibiAlloc(ally, node.then.?),
+                },
+            },
+            .do => Data{
+                .do = .{
+                    .body = try fromChibiAlloc(ally, node.then.?),
+                    .cond = try fromChibiAlloc(ally, node.cond.?),
                 },
             },
             .num => Data{
