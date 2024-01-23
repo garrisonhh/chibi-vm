@@ -45,39 +45,60 @@ fn getIntSignedness(t: Type) std.builtin.Signedness {
 
 // lowering ====================================================================
 
-fn lowerVarAddr(b: *Builder, ctx: *const Context, v: Node.Var) !void {
-    if (ctx.locals.get(v.name)) |local| {
-        try b.op(.{ .local = local.offset });
-    } else {
-        const lbl = b.getGlobal(v.name) orelse {
-            if (in_debug) {
-                std.debug.panic("unknown object name: {s}", .{v.name});
-            }
-            unreachable;
-        };
-        try b.op(.{ .label = lbl });
-    }
-}
-
 /// lower a node as its address (for lvalues, for example)
 fn lowerAddr(b: *Builder, ctx: *const Context, node: *const Node) !void {
     switch (node.data) {
         .@"var" => |obj| {
-            try lowerVarAddr(b, ctx, obj);
+            if (ctx.locals.get(obj.name)) |local| {
+                try b.op(.{ .local = local.offset });
+            } else {
+                const lbl = b.getGlobal(obj.name) orelse {
+                    if (in_debug) {
+                        std.debug.panic("unknown object name: {s}", .{obj.name});
+                    }
+                    unreachable;
+                };
+                try b.op(.{ .label = lbl });
+            }
+        },
+        .member => |access| {
+            try lowerAddr(b, ctx, access.child);
+            try b.constant(u32, @as(u32, @intCast(access.member.offset)));
+            try b.op(.{ .add = .half });
+        },
+        .cast => |child| {
+            // this should always be a noop
+            try lowerAddr(b, ctx, child);
         },
 
         else => {
-            try unimplemented("{}", .{@as(std.meta.Tag(Node.Data), node.data)});
+            try unimplemented("lower addr for {s}", .{@tagName(node.data)});
         },
+    }
+}
+
+/// lower a node addr and then load the result
+fn lowerAddrLoad(b: *Builder, ctx: *const Context, node: *const Node) !void {
+    try lowerAddr(b, ctx, node);
+
+    if (Width.fromBytesFit(node.ty.?.size)) |width| {
+        try b.op(.{ .load = .{
+            .width = width,
+            .offset = 0,
+        } });
+    } else {
+        try unimplemented("load large value", .{});
     }
 }
 
 /// lower a statement node or a node being read as a value
 fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
     switch (node.data) {
+        .@"var", .member => try lowerAddrLoad(b, ctx, node),
+
         // as far as I can tell, this returns void/undefined
         .null_expr => {
-            try b.op(.{ .constant = .{ .byte = .{0} } });
+            try b.constant(u8, 0);
         },
         inline .add, .sub => |args, tag| {
             const width = Width.fromBytesExact(node.ty.?.size).?;
@@ -148,19 +169,12 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
         },
         .assign => |args| {
             try lowerAddr(b, ctx, args[0]);
-            try lowerNode(b, ctx, args[1]);
+            try lowerAddr(b, ctx, args[1]);
 
-            if (Width.fromBytesFit(args[0].ty.?.size)) |width| {
-                try b.op(.{ .store = .{
-                    .width = width,
-                    .offset = 0,
-                } });
+            const size = args[0].ty.?.size;
+            std.debug.assert(size == args[1].ty.?.size);
 
-                // TODO assignment in C is supposed to return the value
-                try b.op(.{ .constant = .{ .byte = .{0} } });
-            } else {
-                try unimplemented("assign with big values", .{});
-            }
+            try b.op(.{ .copy = @intCast(size) });
         },
         .comma => |args| {
             try lowerNode(b, ctx, args[0]);
@@ -290,8 +304,8 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
             try b.op(.call);
         },
         .num => |num| {
-            const constant: Op.Constant = switch (node.ty.?.data) {
-                inline else => |_, tag| c: {
+            switch (node.ty.?.data) {
+                inline else => |_, tag| {
                     const T = switch (tag) {
                         .char => u8,
                         .short => u16,
@@ -308,23 +322,8 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) !void {
                         else => unreachable,
                     };
 
-                    const width = comptime Width.fromBytesExact(@sizeOf(T)).?;
-                    const arr: [width.bytes()]u8 = @bitCast(value);
-                    break :c @unionInit(Op.Constant, @tagName(width), arr);
+                    try b.constant(T, value);
                 },
-            };
-
-            try b.op(.{ .constant = constant });
-        },
-        .@"var" => |obj| {
-            if (ctx.locals.get(obj.name)) |local| {
-                try b.op(.{ .local = local.offset });
-                try b.op(.{ .load = .{
-                    .width = Width.fromBytesFit(local.ty.size).?,
-                    .offset = 0,
-                } });
-            } else {
-                try unimplemented("global namespace", .{});
             }
         },
         .memzero => |obj| {

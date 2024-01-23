@@ -67,5 +67,8 @@ pub fn main() !void {
     var env = try vm.Env.init(ally, .{});
     defer env.deinit(ally);
 
+    try env.push(i8, 11);
+    try env.push(i32, 22);
     try env.exec(&mod, "foo");
+    std.debug.print("foo -> {}\n", .{try env.pop(i32)});
 }
