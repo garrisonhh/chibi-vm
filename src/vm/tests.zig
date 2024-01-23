@@ -13,8 +13,6 @@
 //! specified vm which is also a goal.
 //!
 //! TODO tests still need to be implemented for:
-//! call
-//! label
 //! ret
 //! zero
 //! copy
@@ -922,4 +920,38 @@ test "jnz" {
             try std.testing.expectEqual(expected, state.pc);
         }
     }
+}
+
+test "call a label" {
+    try simple.init();
+    defer simple.deinit();
+
+    var b = Builder.init(ally);
+    defer b.deinit();
+
+    const dest = try b.backref();
+    try b.op(.{ .label = dest });
+    try b.op(.call);
+
+    b.resolve(dest);
+    try b.op(.halt);
+    try b.op(.halt);
+
+    var mod = try b.build();
+    defer mod.deinit(ally);
+
+    var state = Env.State{
+        .code = mod.code,
+        .pc = 0,
+    };
+    const res = simple.run(&state);
+    try std.testing.expectError(Env.Error.VmHalt, res);
+    try std.testing.expectEqual(state.code.len - 1, state.pc);
+
+    const expected = Env.Frame{
+        .base = simple.env.stack.mem.ptr,
+        .pc = 6,
+    };
+    const frame = try simple.pop(Env.Frame);
+    try std.testing.expectEqual(expected, frame);
 }
