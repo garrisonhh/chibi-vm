@@ -12,6 +12,51 @@ CC = os.path.join(PROJECT_DIR, "zig-out/bin/chibi-vm")
 TEST_DIR = os.path.join(PROJECT_DIR, "tests/cases")
 LOG_FILE = os.path.join(PROJECT_DIR, "tests.log")
 
+# these are tests I'm not interested in due to project scope
+IGNORED_TESTS = set([
+    # goto, break, continue, switch/case
+    10,
+    34,
+    51,
+    105,
+
+    # recursive types
+    19,
+
+    # libc
+    25,
+    40,
+    56,
+    104,
+
+    # global variables TODO I should probably support this
+    23,
+    24,
+    33,
+    45,
+    47,
+    48,
+    49,
+    50,
+    51,
+    62,
+    67,
+    68,
+    69,
+    70,
+    88,
+    89,
+    90,
+    91,
+    92,
+    95,
+    96,
+    107,
+
+    # test only chibicc code (e.g. the preprocessor)
+    75,
+])
+
 def collect_paths():
     paths = []
     for filename in os.listdir(TEST_DIR):
@@ -27,9 +72,17 @@ def main():
     testpaths = collect_paths()
     total = 0
     successes = 0
-    skipped = 0
 
     for i, testpath in enumerate(testpaths):
+        # TODO next 120 tests
+        if i == 100:
+            break
+
+        number = i + 1
+
+        if number in IGNORED_TESTS:
+            continue
+
         res = sp.run([CC, "run", testpath], capture_output=True)
 
         if res.returncode == 0:
@@ -37,30 +90,24 @@ def main():
             successes += 1
 
         status = "success" if res.returncode == 0 else "failure"
-        print(f"[{i + 1}] {status}")
+        print(f"[{number}] {status}")
 
         if res.returncode != 0:
             out = res.stdout.decode('unicode_escape')
             err = res.stderr.decode('unicode_escape')
             err = "\n".join(err.strip().split('\n')[:5]) # limit number of lines
 
-            if err.startswith("unimplemented") or "stdio.h" in err:
-                skipped += 1
-                print("UNIMPLEMENTED")
-            else:
-                total += 1
-                print(f"[exited] {res.returncode}")
-                if len(out) > 0:
-                    print(f"[stdout]\n{out}\n")
-                if len(err) > 0:
-                    print(f"[stderr]\n{err}\n")
+            total += 1
+            print(f"[exited] {res.returncode}")
+            if len(out) > 0:
+                print(f"[stdout]\n{out}\n")
+            if len(err) > 0:
+                print(f"[stderr]\n{err}\n")
 
     percent = successes / total * 100.0
-    unskipped_percent = successes / len(testpaths) * 100.0
 
     print("[test summary]")
-    print(f"skipped {skipped}")
-    print(f"passed  {successes}/{total}/{len(testpaths)} ({percent:.2f}%/{unskipped_percent:.2f}%)")
+    print(f"passed  {successes}/{total} ({percent:.2f}%)")
 
 if __name__ == "__main__":
     main()
