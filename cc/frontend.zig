@@ -630,7 +630,7 @@ pub const Object = struct {
     const Self = @This();
 
     pub const Var = struct {
-        data: ?[*]const u8,
+        data: ?[]const u8,
     };
     pub const Func = struct {
         params: []const Self,
@@ -651,11 +651,6 @@ pub const Object = struct {
         const name = cStrSlice(obj.name);
         const ty = try Type.fromChibi(ally, obj.ty);
 
-        if (obj.init_data) |init_data| {
-            const slice = init_data[0..ty.size];
-            std.debug.print("init data for {s}: {any}\n", .{ name, slice });
-        }
-
         const data: Data = data: {
             if (obj.is_function) {
                 const params = try fromChibiSlice(ally, obj.params);
@@ -669,7 +664,7 @@ pub const Object = struct {
                 } };
             } else {
                 break :data Data{ .@"var" = .{
-                    .data = if (obj.init_data) |data| data else null,
+                    .data = if (obj.init_data) |ptr| ptr[0..ty.size] else null,
                 } };
             }
 
@@ -788,10 +783,8 @@ pub fn parse(ally: Allocator, source: Source) FrontendError![]const Object {
     };
 
     var objects = std.ArrayListUnmanaged(Object){};
-    var trav: ?*chibi.Obj = chibi_program;
-    while (trav) |chibi_obj| : (trav = chibi_obj.next) {
-        if (!chibi_obj.is_live) continue;
-
+    var obj_iter = iterateChibi(chibi.Obj, chibi_program);
+    while (obj_iter.next()) |chibi_obj| {
         const object = try Object.fromChibi(ally, chibi_obj);
         try objects.append(ally, object);
 

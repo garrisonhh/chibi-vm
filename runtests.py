@@ -26,6 +26,7 @@ IGNORED_TESTS = set([
     # libc
     25,
     40,
+    54,
     56,
     104,
 
