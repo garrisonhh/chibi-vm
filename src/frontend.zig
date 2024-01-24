@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const in_debug = @import("builtin").mode == .Debug;
 const chibi = @import("chibi.zig");
 
 // cross-language utils ========================================================
@@ -105,6 +106,11 @@ pub const Type = struct {
         child: *Self,
     };
 
+    pub const Array = struct {
+        child: *Self,
+        len: usize,
+    };
+
     pub const Func = struct {
         params: []const *Self,
         returns: *Self,
@@ -123,7 +129,7 @@ pub const Type = struct {
         @"enum",
         ptr: Ptr,
         func: Func,
-        array,
+        array: Array,
         vla,
         @"struct": []const Member,
         @"union",
@@ -188,6 +194,10 @@ pub const Type = struct {
 
                 break :st Data{ .@"struct" = members };
             },
+            .array => Data{ .array = .{
+                .child = try fromChibiAlloc(ally, ty.base.?),
+                .len = @intCast(ty.array_len),
+            } },
 
             inline else => |type_kind| @unionInit(
                 Data,
@@ -301,6 +311,9 @@ pub const Type = struct {
                     try writer.print("{}; ", .{field.type});
                 }
                 try writer.print("}}", .{});
+            },
+            .array => |array| {
+                try writer.print("{}[{}]", .{array.child, array.len});
             },
 
             else => @panic("TODO"),
@@ -792,6 +805,11 @@ pub fn parse(ally: Allocator, source: Source) FrontendError![]const Object {
 
         const object = try Object.fromChibi(ally, chibi_obj);
         try objects.append(ally, object);
+
+        // TODO make this a cli flag?
+        if (in_debug) {
+            object.dump();
+        }
     }
 
     return try objects.toOwnedSlice(ally);

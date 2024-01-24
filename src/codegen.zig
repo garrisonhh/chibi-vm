@@ -226,10 +226,16 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
             }
         },
         .cast => |child| {
-            try lowerNode(b, ctx, child);
-
             const into = node.ty.?;
             const from = child.ty.?;
+
+            // pointer decay
+            if (into.data == .ptr and from.data == .array) {
+                try lowerAddr(b, ctx, child);
+                return;
+            }
+
+            try lowerNode(b, ctx, child);
 
             if (into.eql(from)) {
                 // no cast required
