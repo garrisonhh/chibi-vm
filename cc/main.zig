@@ -6,7 +6,7 @@ const Allocator = std.mem.Allocator;
 const frontend = @import("frontend.zig");
 const Source = frontend.Source;
 const codegen = @import("codegen.zig");
-const vm = @import("vm.zig");
+const vm = @import("vm");
 
 // enable all tests
 comptime {

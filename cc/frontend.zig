@@ -3,7 +3,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const in_debug = @import("builtin").mode == .Debug;
-const chibi = @import("chibi.zig");
+const chibi = @import("chibi");
 
 // cross-language utils ========================================================
 
@@ -313,7 +313,7 @@ pub const Type = struct {
                 try writer.print("}}", .{});
             },
             .array => |array| {
-                try writer.print("{}[{}]", .{array.child, array.len});
+                try writer.print("{}[{}]", .{ array.child, array.len });
             },
 
             else => @panic("TODO"),
