@@ -579,6 +579,10 @@ pub const Node = struct {
                     }
                     meta.body.dumpIndented("body", level + 1);
                 },
+                Do => {
+                    meta.body.dumpIndented("body", level + 1);
+                    meta.body.dumpIndented("cond", level + 1);
+                },
                 Funcall => {
                     meta.func.dumpIndented("function", level + 1);
                     for (meta.args) |arg| {
