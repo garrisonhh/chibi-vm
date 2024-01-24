@@ -363,6 +363,12 @@ const monomorphic_subs = struct {
         try env.push(u32, dest);
     }
 
+    fn dup(env: *Env, _: *State) Error!void {
+        const val = try env.pop(u64);
+        try env.push(u64, val);
+        try env.push(u64, val);
+    }
+
     fn drop(env: *Env, _: *State) Error!void {
         _ = try env.pop(u8);
     }

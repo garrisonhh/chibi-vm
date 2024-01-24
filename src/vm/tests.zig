@@ -624,6 +624,23 @@ test "enter" {
     }
 }
 
+test "dup" {
+    try simple.init();
+    defer simple.deinit();
+
+    var mod = try simple.build(&.{
+        .dup,
+    });
+    defer mod.deinit(ally);
+
+    try simple.push(u64, 42);
+    try simple.runModule(&mod);
+    try simple.expectStackSize(16);
+    try simple.expect(u64, 42);
+    try simple.expect(u64, 42);
+    try simple.expectStackSize(0);
+}
+
 test "drop" {
     try simple.init();
     defer simple.deinit();

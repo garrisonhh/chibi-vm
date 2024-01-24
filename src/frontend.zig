@@ -223,11 +223,20 @@ pub const Type = struct {
                     void => true,
                     Int => this.signedness == that.signedness,
                     Ptr => this.child.eql(that.child.*),
-                    Func => for (this.params, that.params) |p1, p2| {
+                    Func => if (this.params.len != that.params.len) func: {
+                        break :func false;
+                    } else for (this.params, that.params) |p1, p2| {
                         if (!p1.eql(p2.*)) {
                             break false;
                         }
                     } else this.returns.eql(that.returns.*),
+                    []const Member => if (this.len != that.len) membs: {
+                        break :membs false;
+                    } else for (this, that) |m1, m2| {
+                        if (m1.offset != m2.offset or !m1.type.eql(m2.type.*)) {
+                            break false;
+                        }
+                    } else true,
 
                     else => unreachable,
                 };

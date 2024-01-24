@@ -66,14 +66,12 @@ fn lowerAddr(
             std.debug.assert(size == args[1].ty.?.size);
 
             if (vm.Width.fromBytesExact(size)) |width| {
+                try b.op(.dup);
                 try lowerNode(b, ctx, args[1]);
                 try b.op(.{ .store = .{
                     .width = width,
                     .offset = 0,
                 } });
-
-                // TODO return ptr
-                try b.constant(u8, 0);
             } else {
                 try lowerAddr(b, ctx, args[1]);
                 try b.op(.{ .copy = @intCast(size) });

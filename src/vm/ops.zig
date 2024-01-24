@@ -21,6 +21,8 @@ pub const Opcode = enum(u6) {
     constant,
     /// read code loc from code and push to stack
     label,
+    /// duplicates a stack value
+    dup,
     /// remove a stack value
     drop,
 
@@ -65,14 +67,12 @@ pub const Opcode = enum(u6) {
     // 2. pops pointer
     // 3. derefs `width` bytes at `pointer + offset * width` and pushes
     // (this arrived unintentionaly super close to the design of x86 mov!)
-    // TODO allow ptr to pass through
     load,
     // 1. reads offset as u16 from bytecode
     // 2. pops data
     // 3. pops pointer
     // 4. writes `width` bytes at `pointer + offset * width`
     // (this arrived unintentionaly super close to the design of x86 mov!)
-    // TODO allow ptr to pass through
     store,
 
     /// reads u32 length, peeks `dst` ptr and writes zeroes to it
@@ -107,6 +107,7 @@ pub const Opcode = enum(u6) {
             .ret => .{ .inputs = 1, .outputs = 0, .sized = false },
             .constant => .{ .inputs = 0, .outputs = 1, .sized = true },
             .label => .{ .inputs = 0, .outputs = 1, .sized = false },
+            .dup => .{ .inputs = 1, .outputs = 2, .sized = false },
             .drop => .{ .inputs = 1, .outputs = 0, .sized = false },
             .local => .{ .inputs = 0, .outputs = 1, .sized = false },
             .load => .{ .inputs = 1, .outputs = 1, .sized = true },
@@ -197,6 +198,7 @@ pub const ByteOp = packed struct(u8) {
     pub fn extraBytes(bo: ByteOp) usize {
         return switch (bo.opcode) {
             .halt,
+            .dup,
             .drop,
             .add,
             .sub,
@@ -269,6 +271,7 @@ pub const Op = union(Opcode) {
     ret: u8,
     constant: Constant,
     label: Label,
+    dup,
     drop,
     add: Width,
     sub: Width,

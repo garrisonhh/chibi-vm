@@ -49,7 +49,14 @@ fn run(ally: Allocator, source_paths: []const [:0]const u8) !void {
 
     const cwd = std.fs.cwd();
     for (source_paths, sources) |path, *source| {
-        const contents = try cwd.readFileAllocOptions(arena_ally, path, std.math.maxInt(usize), null, @alignOf(u8), 0);
+        const contents = try cwd.readFileAllocOptions(
+            arena_ally,
+            path,
+            std.math.maxInt(usize),
+            null,
+            @alignOf(u8),
+            0,
+        );
 
         source.* = Source{
             .name = path,
