@@ -413,7 +413,7 @@ fn lowerFunction(
     b: *Builder,
     name: []const u8,
     ty: Type,
-    func: AstObject.FuncDef,
+    func: AstObject.Func,
 ) !void {
     var ctx = Context{
         .ret_params = @intCast(func.params.len),
@@ -484,7 +484,7 @@ pub fn lower(ally: Allocator, ast: []const frontend.Object) !vm.Object {
     // ast comes in reverse order
     var iter = std.mem.reverseIterator(ast);
     while (iter.next()) |it| {
-        try lowerFunction(&b, it.name, it.ty, it.data.func_def);
+        try lowerFunction(&b, it.name, it.ty, it.data.func);
     }
 
     return try b.build();

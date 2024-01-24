@@ -629,23 +629,18 @@ pub const Node = struct {
 pub const Object = struct {
     const Self = @This();
 
-    pub const VarDef = struct {
+    pub const Var = struct {
         data: ?[*]const u8,
     };
-    pub const FuncDef = struct {
+    pub const Func = struct {
         params: []const Self,
         locals: []const Self,
         body: []const Node,
     };
 
-    pub const VarRef = struct {};
-    pub const FuncRef = struct {};
-
     pub const Data = union(enum) {
-        var_def: VarDef,
-        func_def: FuncDef,
-        var_ref: VarRef,
-        func_ref: FuncRef,
+        @"var": Var,
+        func: Func,
     };
 
     name: []const u8,
@@ -662,28 +657,20 @@ pub const Object = struct {
         }
 
         const data: Data = data: {
-            if (obj.is_definition) {
-                if (obj.is_function) {
-                    const params = try fromChibiSlice(ally, obj.params);
-                    const locals = try fromChibiSlice(ally, obj.locals);
-                    const body = try Node.fromChibiSlice(ally, obj.body);
+            if (obj.is_function) {
+                const params = try fromChibiSlice(ally, obj.params);
+                const locals = try fromChibiSlice(ally, obj.locals);
+                const body = try Node.fromChibiSlice(ally, obj.body);
 
-                    break :data Data{ .func_def = .{
-                        .params = params,
-                        .locals = locals,
-                        .body = body,
-                    } };
-                } else {
-                    break :data Data{ .var_def = .{
-                        .data = if (obj.init_data) |data| data else null,
-                    } };
-                }
+                break :data Data{ .func = .{
+                    .params = params,
+                    .locals = locals,
+                    .body = body,
+                } };
             } else {
-                if (obj.is_function) {
-                    break :data Data{ .func_ref = .{} };
-                } else {
-                    break :data Data{ .var_ref = .{} };
-                }
+                break :data Data{ .@"var" = .{
+                    .data = if (obj.init_data) |data| data else null,
+                } };
             }
 
             unreachable;
@@ -726,12 +713,11 @@ pub const Object = struct {
         if (level > 0) return;
 
         switch (self.data) {
-            .var_def => |vd| {
+            .@"var" => |vd| {
                 for (0..level * 2) |_| std.debug.print(" ", .{});
                 std.debug.print("data: {?*}\n", .{vd.data});
             },
-
-            .func_def => |fd| {
+            .func => |fd| {
                 for (fd.params) |param| {
                     param.dumpIndented(level + 1);
                 }
@@ -744,8 +730,6 @@ pub const Object = struct {
                     node.dumpIndented("body", level + 1);
                 }
             },
-
-            else => {},
         }
     }
 
