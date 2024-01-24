@@ -391,7 +391,7 @@ pub const Node = struct {
         addr: *Node,
         deref: Deref,
         not,
-        bitnot,
+        bitnot: *Node,
         logand,
         logor,
         @"return": *Node,
@@ -434,6 +434,7 @@ pub const Node = struct {
             .expr_stmt,
             .stmt_expr,
             .addr,
+            .bitnot,
             => |tag| @unionInit(
                 Data,
                 @tagName(tag),

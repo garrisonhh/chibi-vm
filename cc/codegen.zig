@@ -148,7 +148,20 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
         .null_expr => {
             try b.constant(u8, 0);
         },
-        inline .add, .sub => |args, tag| {
+        inline .neg, .bitnot => |child, tag| {
+            const width = Width.fromBytesExact(node.ty.?.size).?;
+
+            try lowerNode(b, ctx, child);
+
+            const op: Op = switch (tag) {
+                .neg => .{ .neg = width },
+                .bitnot => .{ .bitcom = width },
+                else => unreachable,
+            };
+
+            try b.op(op);
+        },
+        inline .add, .sub, .bitand, .bitor, .bitxor => |args, tag| {
             const width = Width.fromBytesExact(node.ty.?.size).?;
 
             try lowerNode(b, ctx, args[0]);
