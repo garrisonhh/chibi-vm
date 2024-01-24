@@ -15,14 +15,20 @@ const chibi = struct {
         "src/chibi/unicode.c",
     };
 
-    // taken from the original makefile
-    const c_flags = [_][]const u8{
-        "-std=c11",
-        "-fno-common",
-        "-Wall",
-        "-Wno-switch",
-        "-ggdb", // TODO remove in release mode
-    };
+    fn cFlags(optimize: std.builtin.Mode) []const []const u8 {
+        // taken from the original makefile
+        const common_c_flags = [_][]const u8{
+            "-std=c11",
+            "-fno-common",
+            "-Wall",
+            "-Wno-switch",
+        };
+
+        return switch (optimize) {
+            .Debug => comptime common_c_flags ++ &[_][]const u8{"-ggdb"},
+            else => comptime common_c_flags ++ &[_][]const u8{"-O2"},
+        };
+    }
 };
 
 pub fn build(b: *std.Build) void {
@@ -39,7 +45,7 @@ pub fn build(b: *std.Build) void {
 
     exe.linkLibC();
     exe.addIncludePath(.{ .path = chibi.c_include_path });
-    exe.addCSourceFiles(&chibi.c_sources, &chibi.c_flags);
+    exe.addCSourceFiles(&chibi.c_sources, chibi.cFlags(optimize));
 
     b.installArtifact(exe);
 
@@ -60,7 +66,7 @@ pub fn build(b: *std.Build) void {
 
     unit_tests.linkLibC();
     unit_tests.addIncludePath(.{ .path = chibi.c_include_path });
-    unit_tests.addCSourceFiles(&chibi.c_sources, &chibi.c_flags);
+    unit_tests.addCSourceFiles(&chibi.c_sources, chibi.cFlags(optimize));
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
