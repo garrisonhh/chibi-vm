@@ -16,8 +16,11 @@ you can run chibi-vm to see a (hopefully helpful) list of subcommands to use.
 ### compiler tests
 
 once the executable is built, you can run end-to-end tests with `./runtests.py`.
-it is written in relatively generic python 3, and uses the wonderful [c-testsuite](https://github.com/c-testsuite/c-testsuite). you can use the results of the
-script to see how well this project stacks up against the big boys :)
+it is written in relatively generic python 3, and uses the wonderful [c-testsuite](https://github.com/c-testsuite/c-testsuite).
+you can use the results of the script to see how well this project stacks up
+against the big boys :)
+
+### vm tests
 
 there is also extensive testing of the bytecode vm internals. these tests can
 be run with `zig build test`, and can be found in the source code itself.
