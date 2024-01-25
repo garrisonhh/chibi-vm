@@ -1,7 +1,6 @@
 const std = @import("std");
 const in_debug = @import("builtin").mode == .Debug;
-const objects = @import("objects.zig");
-const Label = objects.Builder.Label;
+const Label = @import("target.zig").Builder.Label;
 
 pub const Opcode = enum(u6) {
     /// unexpected end of execution
@@ -20,6 +19,7 @@ pub const Opcode = enum(u6) {
     /// read value bytes from code and push to stack
     constant,
     /// read code loc from code and push to stack
+    /// TODO similar ops for data and bss
     label,
     /// duplicates a stack value
     dup,

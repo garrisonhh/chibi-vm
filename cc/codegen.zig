@@ -81,12 +81,7 @@ fn lowerAddr(
             if (ctx.locals.get(obj.name)) |local| {
                 try b.op(.{ .local = local.offset });
             } else {
-                const lbl = b.getGlobal(obj.name) orelse {
-                    if (in_debug) {
-                        std.debug.panic("unknown object name: {s}", .{obj.name});
-                    }
-                    unreachable;
-                };
+                const lbl = try b.symbol(obj.name);
                 try b.op(.{ .label = lbl });
             }
         },
@@ -309,10 +304,10 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
                 try lowerNode(b, ctx, meta.then);
                 try b.op(.{ .jump = end });
 
-                b.resolve(else_branch);
+                b.resolve(else_branch, .code);
                 try lowerNode(b, ctx, @"else");
 
-                b.resolve(end);
+                b.resolve(end, .code);
             } else {
                 const end = try b.backref();
 
@@ -323,7 +318,7 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
                 } });
 
                 try lowerNode(b, ctx, meta.then);
-                b.resolve(end);
+                b.resolve(end, .code);
             }
         },
         .@"for" => |meta| {
@@ -334,7 +329,7 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
                 try lowerNode(b, ctx, n);
             }
 
-            b.resolve(start);
+            b.resolve(start, .code);
 
             if (meta.cond) |cond| {
                 try lowerNode(b, ctx, cond);
@@ -351,10 +346,10 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
             }
 
             try b.op(.{ .jump = start });
-            b.resolve(end);
+            b.resolve(end, .code);
         },
         .do => |meta| {
-            const start = try b.label();
+            const start = try b.label(.code);
 
             try lowerNode(b, ctx, meta.body);
             try lowerNode(b, ctx, meta.cond);
@@ -463,7 +458,7 @@ fn lowerFunction(
 
     // write code
     // TODO respect static functions with ns vvv
-    try b.global(name, .exported, try b.label());
+    _ = try b.define(name, .exported, .code);
     try b.op(.{ .enter = stack_size });
 
     for (func.body) |node| {
@@ -477,15 +472,18 @@ fn lowerFunction(
     }
 }
 
-pub fn lower(ally: Allocator, ast: []const frontend.Object) !vm.Object {
+pub fn lower(ally: Allocator, ast: []const frontend.Object) !vm.Unit {
     var b = Builder.init(ally);
     defer b.deinit();
 
     // ast comes in reverse order
     var iter = std.mem.reverseIterator(ast);
-    while (iter.next()) |it| {
-        try lowerFunction(&b, it.name, it.ty, it.data.func);
+    while (iter.next()) |obj| {
+        switch (obj.data) {
+            .@"var" => {}, // TODO
+            .func => |func| try lowerFunction(&b, obj.name, obj.ty, func),
+        }
     }
 
-    return try b.build();
+    return try b.build(ally);
 }

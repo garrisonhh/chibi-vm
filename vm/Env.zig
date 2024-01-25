@@ -7,8 +7,8 @@ const ops = @import("ops.zig");
 const ByteOp = ops.ByteOp;
 const Opcode = ops.Opcode;
 const Width = ops.Width;
-const objects = @import("objects.zig");
-const Module = objects.Module;
+const target = @import("target.zig");
+const Unit = target.Unit;
 
 // utils =======================================================================
 
@@ -257,25 +257,25 @@ pub fn run(env: *Env, state: *State) Error!void {
 
 pub const ExecError = Error || error{
     NoSuchFunction,
+    NotAFunction,
 };
 
-/// execute a function exported from a module
-pub fn exec(
-    env: *Env,
-    mod: *const Module,
-    name: []const u8,
-) ExecError!void {
-    const start = mod.exports.get(name) orelse {
+/// execute a function exported from a unit
+pub fn exec(env: *Env, unit: Unit, name: []const u8) ExecError!void {
+    const loc = unit.get(name) orelse {
         return ExecError.NoSuchFunction;
     };
+    if (loc.segment != .code) {
+        return ExecError.NotAFunction;
+    }
 
     // add call frame from the end of the code so that execution stops cleanly
     // when returning from the exported function
     var state = State{
-        .code = mod.code,
-        .pc = mod.code.len,
+        .code = unit.code,
+        .pc = unit.code.len,
     };
-    try env.call(&state, start);
+    try env.call(&state, loc.offset);
 
     try env.run(&state);
 }

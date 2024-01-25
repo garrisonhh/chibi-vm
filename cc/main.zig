@@ -16,20 +16,20 @@ comptime {
 fn compile(
     backing_ally: Allocator,
     sources: []const Source,
-) !vm.Module {
+) !vm.Unit {
     var arena = std.heap.ArenaAllocator.init(backing_ally);
     defer arena.deinit();
     const ally = arena.allocator();
 
-    var objects = std.ArrayListUnmanaged(vm.Object){};
+    var units = std.ArrayListUnmanaged(vm.Unit){};
 
     for (sources) |source| {
         const ast = try frontend.parse(ally, source);
         const object = try codegen.lower(ally, ast);
-        try objects.append(ally, object);
+        try units.append(ally, object);
     }
 
-    return try vm.link(backing_ally, objects.items);
+    return try vm.link(backing_ally, units.items);
 }
 
 // subcommands =================================================================
@@ -64,8 +64,8 @@ fn run(ally: Allocator, source_paths: []const [:0]const u8) !void {
         };
     }
 
-    var mod = try compile(ally, sources);
-    defer mod.deinit(ally);
+    var exe = try compile(ally, sources);
+    defer exe.deinit(ally);
 
     var env = try vm.Env.init(ally, .{});
     defer env.deinit(ally);
@@ -74,7 +74,7 @@ fn run(ally: Allocator, source_paths: []const [:0]const u8) !void {
     try env.push(i32, 0);
     try env.push(?[*]const [*:0]const u8, null);
 
-    env.exec(&mod, "main") catch |e| switch (e) {
+    env.exec(exe, "main") catch |e| switch (e) {
         vm.Env.ExecError.NoSuchFunction => {
             try stderr.print("error: no main function found\n", .{});
             std.process.exit(1);

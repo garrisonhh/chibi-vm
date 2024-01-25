@@ -18,9 +18,9 @@ const ops = @import("ops.zig");
 const Width = ops.Width;
 const Op = ops.Op;
 const Opcode = ops.Opcode;
-const objects = @import("objects.zig");
-const Builder = objects.Builder;
-const Module = objects.Module;
+const target = @import("target.zig");
+const Builder = target.Builder;
+const Unit = target.Unit;
 const Env = @import("Env.zig");
 
 const ally = std.testing.allocator;
@@ -38,23 +38,16 @@ const simple = struct {
         env.deinit(ally);
     }
 
-    fn build(code: []const Op) !Module {
+    fn build(code: []const Op) !Unit {
         var builder = Builder.init(ally);
         defer builder.deinit();
 
-        const lbl = try builder.label();
-        try builder.global(func_name, .exported, lbl);
-
+        _ =  try builder.define(func_name, .exported, .code);
         for (code) |o| {
             try builder.op(o);
         }
 
-        const obj = try builder.build();
-        defer obj.deinit(ally);
-
-        const mod = try objects.link(ally, &.{obj});
-
-        return mod;
+        return try builder.build(ally);
     }
 
     fn int(comptime w: Width) type {
@@ -65,11 +58,13 @@ const simple = struct {
         return std.meta.Int(.unsigned, @as(u16, w.bytes()) * 8);
     }
 
-    fn runModule(mod: *const Module) !void {
-        const offset = mod.exports.get(func_name).?;
+    fn runUnit(unit: Unit) !void {
+        std.debug.assert(unit.isResolved());
+
+        const loc = unit.get(func_name).?;
         var state = Env.State{
-            .code = mod.code,
-            .pc = offset,
+            .code = unit.code,
+            .pc = loc.offset,
         };
 
         try env.run(&state);
@@ -412,7 +407,7 @@ fn applyVerifier(
         }
 
         const actual: Result = res: {
-            simple.runModule(&mod) catch |e| {
+            simple.runUnit(mod) catch |e| {
                 break :res .{ .err = e };
             };
 
@@ -590,10 +585,10 @@ test "halt" {
     try simple.init();
     defer simple.deinit();
 
-    var mod = try simple.build(&.{.halt});
-    defer mod.deinit(ally);
+    var exe = try simple.build(&.{.halt});
+    defer exe.deinit(ally);
 
-    const result = simple.runModule(&mod);
+    const result = simple.runUnit(exe);
     try std.testing.expectError(Env.Error.VmHalt, result);
 }
 
@@ -610,12 +605,12 @@ test "enter" {
     };
 
     for (cases) |reserve| {
-        var mod = try simple.build(&.{
+        var exe = try simple.build(&.{
             Op{ .enter = reserve },
         });
-        defer mod.deinit(ally);
+        defer exe.deinit(ally);
 
-        try simple.runModule(&mod);
+        try simple.runUnit(exe);
 
         const expected = std.mem.alignForward(usize, reserve, 8);
         try simple.expectStackSize(expected);
@@ -628,13 +623,11 @@ test "dup" {
     try simple.init();
     defer simple.deinit();
 
-    var mod = try simple.build(&.{
-        .dup,
-    });
-    defer mod.deinit(ally);
+    var exe = try simple.build(&.{.dup});
+    defer exe.deinit(ally);
 
     try simple.push(u64, 42);
-    try simple.runModule(&mod);
+    try simple.runUnit(exe);
     try simple.expectStackSize(16);
     try simple.expect(u64, 42);
     try simple.expect(u64, 42);
@@ -645,14 +638,12 @@ test "drop" {
     try simple.init();
     defer simple.deinit();
 
-    var mod = try simple.build(&.{
-        .drop,
-    });
-    defer mod.deinit(ally);
+    var exe = try simple.build(&.{.drop});
+    defer exe.deinit(ally);
 
     try simple.push(u64, 0);
     try simple.expectStackSize(8);
-    try simple.runModule(&mod);
+    try simple.runUnit(exe);
     try simple.expectStackSize(0);
 }
 
@@ -677,10 +668,10 @@ test "constant" {
                 .constant = @unionInit(Op.Constant, @tagName(width), bytes),
             };
 
-            var mod = try simple.build(&.{op});
-            defer mod.deinit(ally);
+            var exe = try simple.build(&.{op});
+            defer exe.deinit(ally);
 
-            try simple.runModule(&mod);
+            try simple.runUnit(exe);
             try simple.expectStackSize(8);
             try simple.expect(Bytes, bytes);
             try simple.expectStackSize(0);
@@ -699,12 +690,12 @@ test "local" {
     for (0..count) |_| {
         const offset = prng.random().int(i16);
 
-        var mod = try simple.build(&.{
+        var exe = try simple.build(&.{
             Op{ .local = offset },
         });
-        defer mod.deinit(ally);
+        defer exe.deinit(ally);
 
-        try simple.runModule(&mod);
+        try simple.runUnit(exe);
 
         const base = @intFromPtr(simple.env.stack.base);
         const expected = if (offset > 0) pos: {
@@ -754,11 +745,11 @@ test "load" {
                 },
             };
 
-            var mod = try simple.build(&.{op});
-            defer mod.deinit(ally);
+            var exe = try simple.build(&.{op});
+            defer exe.deinit(ally);
 
             try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(data)));
-            try simple.runModule(&mod);
+            try simple.runUnit(exe);
             try simple.expectStackSize(8);
             try simple.expect(Bytes, expected.*);
             try simple.expectStackSize(0);
@@ -802,12 +793,12 @@ test "store" {
                 },
             };
 
-            var mod = try simple.build(&.{op});
-            defer mod.deinit(ally);
+            var exe = try simple.build(&.{op});
+            defer exe.deinit(ally);
 
             try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(data)));
             try simple.push(Bytes, input);
-            try simple.runModule(&mod);
+            try simple.runUnit(exe);
             try simple.expectStackSize(0);
 
             const actual: *const Bytes = @ptrCast(data[byte_offset .. byte_offset + nbytes]);
@@ -839,15 +830,15 @@ test "copy" {
         const dest = try ally.alloc(u8, data_len);
         defer ally.free(dest);
 
-        var mod = try simple.build(&.{
+        var exe = try simple.build(&.{
             .{ .copy = data_len },
         });
-        defer mod.deinit(ally);
+        defer exe.deinit(ally);
 
         const data_ptr: *anyopaque = @ptrCast(data);
         try simple.push(*anyopaque, data_ptr);
         try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(dest)));
-        try simple.runModule(&mod);
+        try simple.runUnit(exe);
         try simple.expect(*anyopaque, data_ptr);
         try simple.expectStackSize(0);
 
@@ -875,14 +866,14 @@ test "zero" {
         defer ally.free(data);
         prng.random().bytes(data);
 
-        var mod = try simple.build(&.{
+        var exe = try simple.build(&.{
             .{ .zero = data_len },
         });
-        defer mod.deinit(ally);
+        defer exe.deinit(ally);
 
         const data_ptr: *anyopaque = @ptrCast(data);
         try simple.push(*anyopaque, data_ptr);
-        try simple.runModule(&mod);
+        try simple.runUnit(exe);
         try simple.expect(*anyopaque, data_ptr);
         try simple.expectStackSize(0);
 
@@ -909,13 +900,13 @@ test "jump" {
         try b.op(.{ .jump = dest });
         for (0..n) |_| try b.op(.halt);
 
-        b.resolve(dest);
+        b.resolve(dest, .code);
 
-        var mod = try b.build();
-        defer mod.deinit(ally);
+        var exe = try b.build(ally);
+        defer exe.deinit(ally);
 
         var state = Env.State{
-            .code = mod.code,
+            .code = exe.code,
             .pc = 0,
         };
         try simple.run(&state);
@@ -928,36 +919,41 @@ test "jz" {
     try simple.init();
     defer simple.deinit();
 
-    var b = Builder.init(ally);
-    defer b.deinit();
-
     inline for (comptime std.enums.values(Width)) |width| {
         const I = simple.int(width);
+
+        var b = Builder.init(ally);
+        defer b.deinit();
 
         const dest = try b.backref();
 
         try b.op(.{ .jz = .{ .width = .byte, .dest = dest } });
+        _ = try b.define("nonzero", .exported, .code);
         try b.op(.halt);
 
-        b.resolve(dest);
+        b.resolve(dest, .code);
+        _ = try b.define("zero", .exported, .code);
         try b.op(.halt);
 
-        var mod = try b.build();
-        defer mod.deinit(ally);
+        var exe = try b.build(ally);
+        defer exe.deinit(ally);
+
+        const loc_nonzero = exe.get("nonzero").?;
+        const loc_zero = exe.get("zero").?;
 
         for (0..2) |n| {
             try simple.push(I, @as(I, @intCast(n)));
 
             var state = Env.State{
-                .code = mod.code,
+                .code = exe.code,
                 .pc = 0,
             };
             const res = simple.run(&state);
             try std.testing.expectError(Env.Error.VmHalt, res);
 
             const expected: usize = switch (n) {
-                0 => mod.code.len,
-                1 => mod.code.len - 1,
+                0 => loc_zero.offset + 1,
+                1 => loc_nonzero.offset + 1,
                 else => unreachable,
             };
             try std.testing.expectEqual(expected, state.pc);
@@ -969,36 +965,41 @@ test "jnz" {
     try simple.init();
     defer simple.deinit();
 
-    var b = Builder.init(ally);
-    defer b.deinit();
-
     inline for (comptime std.enums.values(Width)) |width| {
         const I = simple.int(width);
+
+        var b = Builder.init(ally);
+        defer b.deinit();
 
         const dest = try b.backref();
 
         try b.op(.{ .jnz = .{ .width = .byte, .dest = dest } });
+        _ = try b.define("zero", .exported, .code);
         try b.op(.halt);
 
-        b.resolve(dest);
+        b.resolve(dest, .code);
+        _ = try b.define("nonzero", .exported, .code);
         try b.op(.halt);
 
-        var mod = try b.build();
-        defer mod.deinit(ally);
+        var exe = try b.build(ally);
+        defer exe.deinit(ally);
+
+        const loc_nonzero = exe.get("nonzero").?;
+        const loc_zero = exe.get("zero").?;
 
         for (0..2) |n| {
             try simple.push(I, @as(I, @intCast(n)));
 
             var state = Env.State{
-                .code = mod.code,
+                .code = exe.code,
                 .pc = 0,
             };
             const res = simple.run(&state);
             try std.testing.expectError(Env.Error.VmHalt, res);
 
             const expected: usize = switch (n) {
-                0 => mod.code.len - 1,
-                1 => mod.code.len,
+                0 => loc_nonzero.offset + 1,
+                1 => loc_zero.offset + 1,
                 else => unreachable,
             };
             try std.testing.expectEqual(expected, state.pc);
@@ -1024,13 +1025,13 @@ test "label" {
             try b.op(.halt);
         }
 
-        b.resolve(dest);
+        b.resolve(dest, .code);
 
-        var mod = try b.build();
-        defer mod.deinit(ally);
+        var exe = try b.build(ally);
+        defer exe.deinit(ally);
 
         var state = Env.State{
-            .code = mod.code,
+            .code = exe.code,
             .pc = 0,
         };
         const res = simple.run(&state);
@@ -1050,15 +1051,15 @@ test "call" {
     try b.op(.{ .label = dest });
     try b.op(.call);
 
-    b.resolve(dest);
+    b.resolve(dest, .code);
     try b.op(.halt);
     try b.op(.halt);
 
-    var mod = try b.build();
-    defer mod.deinit(ally);
+    var exe = try b.build(ally);
+    defer exe.deinit(ally);
 
     var state = Env.State{
-        .code = mod.code,
+        .code = exe.code,
         .pc = 0,
     };
     const res = simple.run(&state);
@@ -1092,8 +1093,8 @@ test "ret" {
             try b.op(.{ .ret = @intCast(n) });
             try b.op(.halt);
 
-            var mod = try b.build();
-            defer mod.deinit(ally);
+            var exe = try b.build(ally);
+            defer exe.deinit(ally);
 
             const start_pc: usize = std.math.maxInt(usize);
             const start_base = simple.env.stack.base;
@@ -1106,7 +1107,7 @@ test "ret" {
             }
 
             var state = Env.State{
-                .code = mod.code,
+                .code = exe.code,
                 .pc = start_pc,
             };
             try simple.env.call(&state, 0);
