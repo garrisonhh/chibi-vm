@@ -927,7 +927,7 @@ test "jz" {
 
         const dest = try b.backref();
 
-        try b.op(.{ .jz = .{ .width = .byte, .dest = dest } });
+        try b.op(.{ .jz = .{ .width = width, .dest = dest } });
         _ = try b.define("nonzero", .exported, .code);
         try b.op(.halt);
 
@@ -973,7 +973,7 @@ test "jnz" {
 
         const dest = try b.backref();
 
-        try b.op(.{ .jnz = .{ .width = .byte, .dest = dest } });
+        try b.op(.{ .jnz = .{ .width = width, .dest = dest } });
         _ = try b.define("zero", .exported, .code);
         try b.op(.halt);
 
@@ -998,8 +998,8 @@ test "jnz" {
             try std.testing.expectError(Env.Error.VmHalt, res);
 
             const expected: usize = switch (n) {
-                0 => loc_nonzero.offset + 1,
-                1 => loc_zero.offset + 1,
+                0 => loc_zero.offset + 1,
+                1 => loc_nonzero.offset + 1,
                 else => unreachable,
             };
             try std.testing.expectEqual(expected, state.pc);
