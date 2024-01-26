@@ -236,7 +236,7 @@ pub const Builder = struct {
         segment: Segment,
     ) SymbolError!Label {
         const lbl = try self.defineBackref(name, vis);
-        self.resolve(lbl, segment);
+        self.resolveInSegment(lbl, segment);
         return lbl;
     }
 
@@ -255,6 +255,13 @@ pub const Builder = struct {
         return res.value_ptr.*;
     }
 
+    /// create and resolve a label
+    fn here(self: *Self, segment: Segment) Allocator.Error!Label {
+        const lbl = try self.backref();
+        self.resolveInSegment(lbl, segment);
+        return lbl;
+    }
+
     /// create an unresolved (future) label
     pub fn backref(self: *Self) Allocator.Error!Label {
         const ally = self.ally;
@@ -267,7 +274,7 @@ pub const Builder = struct {
     }
 
     /// resolve a backref with the current offset of a segment
-    pub fn resolve(self: *Self, lbl: Label, segment: Segment) void {
+    pub fn resolveInSegment(self: *Self, lbl: Label, segment: Segment) void {
         const offset: u32 = switch (segment) {
             .code => @intCast(self.code.items.len),
             .data => @intCast(self.data_seg.items.len),
@@ -284,17 +291,21 @@ pub const Builder = struct {
         self.labels.items[lbl.index] = loc;
     }
 
-    /// create and resolve a label
-    /// TODO make this code only?
-    pub fn label(self: *Self, segment: Segment) Allocator.Error!Label {
-        const lbl = try self.backref();
-        self.resolve(lbl, segment);
-        return lbl;
+    /// resolve a code backref
+    pub fn resolve(self: *Self, lbl: Label) void {
+        self.resolveInSegment(lbl, .code);
+    }
+
+    /// create and resolve a code label
+    pub fn label(self: *Self) Allocator.Error!Label {
+        return try self.here(.code);
     }
 
     /// add data to globally loaded data
     /// TODO make this return a data label
-    pub fn data(self: *Self, bytes: []const u8) Allocator.Error!void {
+    pub fn data(self: *Self, bytes: []const u8) Allocator.Error!Label {
+        const lbl = self.here(.data);
+
         try self.data_seg.appendSlice(self.ally, bytes);
 
         // ensure data remains aligned to 8 bytes
@@ -303,11 +314,13 @@ pub const Builder = struct {
         if (extra > 0) {
             try self.data_seg.appendNTimes(self.ally, undefined, extra);
         }
+
+        return lbl;
     }
 
     /// reserve uninitialized global memory
     pub fn bss(self: *Self, size: usize) Allocator.Error!Label {
-        const lbl = self.label(.bss);
+        const lbl = self.here(.bss);
         self.bss_size += @intCast(size);
 
         return lbl;

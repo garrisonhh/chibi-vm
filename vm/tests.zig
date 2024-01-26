@@ -900,7 +900,7 @@ test "jump" {
         try b.op(.{ .jump = dest });
         for (0..n) |_| try b.op(.halt);
 
-        b.resolve(dest, .code);
+        b.resolve(dest);
 
         const exe = try b.build(ally);
         defer exe.deinit(ally);
@@ -930,7 +930,7 @@ test "jz" {
         _ = try b.define("nonzero", .exported, .code);
         try b.op(.halt);
 
-        b.resolve(dest, .code);
+        b.resolve(dest);
         _ = try b.define("zero", .exported, .code);
         try b.op(.halt);
 
@@ -975,7 +975,7 @@ test "jnz" {
         _ = try b.define("zero", .exported, .code);
         try b.op(.halt);
 
-        b.resolve(dest, .code);
+        b.resolve(dest);
         _ = try b.define("nonzero", .exported, .code);
         try b.op(.halt);
 
@@ -1022,7 +1022,7 @@ test "label" {
             try b.op(.halt);
         }
 
-        b.resolve(dest, .code);
+        b.resolve(dest);
 
         const exe = try b.build(ally);
         defer exe.deinit(ally);
@@ -1043,8 +1043,7 @@ test "data" {
     var b = Builder.init(ally);
     defer b.deinit();
 
-    const label = try b.label(.data);
-    try b.data("hello, world");
+    const label = try b.data("hello, world");
     try b.op(.{ .data = label });
 
     const exe = try b.build(ally);
@@ -1098,7 +1097,7 @@ test "call" {
     try b.op(.{ .label = dest });
     try b.op(.call);
 
-    b.resolve(dest, .code);
+    b.resolve(dest);
     try b.op(.halt);
     try b.op(.halt);
 
