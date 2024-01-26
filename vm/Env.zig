@@ -293,8 +293,6 @@ fn dumpStack(env: *const Env) void {
 /// execute ops until complete with state provided
 pub fn run(env: *Env, state: *State) Error!void {
     while (state.pc < state.code_len) {
-        dumpNext(env, state.*);
-
         const byte = state.readByte();
         const sub = byte_subs[byte].?;
 

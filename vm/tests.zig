@@ -62,10 +62,10 @@ const simple = struct {
         std.debug.assert(unit.isResolved());
 
         const loc = unit.get(func_name).?;
+        std.debug.assert(loc.segment == .code);
 
-        var state = try Env.State.init(ally, unit);
-        defer state.deinit();
-        state.pc = loc.offset;
+        var state = try Env.State.init(ally, unit, loc.offset);
+        defer state.deinit(ally);
 
         try env.run(&state);
     }
@@ -346,7 +346,7 @@ fn VerifierResult(comptime T: type) type {
     return union(enum) {
         const Self = @This();
 
-        err: Env.Error,
+        err: Env.ExecError,
         payload: T,
 
         fn from(eu: Env.Error!T) Self {
@@ -905,13 +905,12 @@ test "jump" {
         var exe = try b.build(ally);
         defer exe.deinit(ally);
 
-        var state = Env.State{
-            .code = exe.code,
-            .pc = 0,
-        };
+        var state = try Env.State.init(ally, exe, 0);
+        defer state.deinit(ally);
+
         try simple.run(&state);
 
-        try std.testing.expectEqual(state.code.len, state.pc);
+        try std.testing.expectEqual(state.code_len, state.pc);
     }
 }
 
@@ -944,10 +943,9 @@ test "jz" {
         for (0..2) |n| {
             try simple.push(I, @as(I, @intCast(n)));
 
-            var state = Env.State{
-                .code = exe.code,
-                .pc = 0,
-            };
+            var state = try Env.State.init(ally, exe, 0);
+            defer state.deinit(ally);
+
             const res = simple.run(&state);
             try std.testing.expectError(Env.Error.VmHalt, res);
 
@@ -990,10 +988,9 @@ test "jnz" {
         for (0..2) |n| {
             try simple.push(I, @as(I, @intCast(n)));
 
-            var state = Env.State{
-                .code = exe.code,
-                .pc = 0,
-            };
+            var state = try Env.State.init(ally, exe, 0);
+            defer state.deinit(ally);
+
             const res = simple.run(&state);
             try std.testing.expectError(Env.Error.VmHalt, res);
 
@@ -1030,10 +1027,9 @@ test "label" {
         var exe = try b.build(ally);
         defer exe.deinit(ally);
 
-        var state = Env.State{
-            .code = exe.code,
-            .pc = 0,
-        };
+        var state = try Env.State.init(ally, exe, 0);
+        defer state.deinit(ally);
+
         const res = simple.run(&state);
         try std.testing.expectError(Env.Error.VmHalt, res);
         try simple.expect(u32, 6 + @as(u32, @intCast(n)));
@@ -1061,13 +1057,12 @@ test "call" {
     var exe = try b.build(ally);
     defer exe.deinit(ally);
 
-    var state = Env.State{
-        .code = exe.code,
-        .pc = 0,
-    };
+    var state = try Env.State.init(ally, exe, 0);
+    defer state.deinit(ally);
+
     const res = simple.run(&state);
     try std.testing.expectError(Env.Error.VmHalt, res);
-    try std.testing.expectEqual(state.code.len - 1, state.pc);
+    try std.testing.expectEqual(state.code_len - 1, state.pc);
 
     const expected = Env.Frame{
         .base = simple.env.stack.mem.ptr,
@@ -1099,7 +1094,7 @@ test "ret" {
             var exe = try b.build(ally);
             defer exe.deinit(ally);
 
-            const start_pc: usize = std.math.maxInt(usize);
+            const start_pc: u32 = std.math.maxInt(u32);
             const start_base = simple.env.stack.base;
             const start_top = simple.env.stack.top;
 
@@ -1109,10 +1104,9 @@ test "ret" {
                 try simple.push(u64, val);
             }
 
-            var state = Env.State{
-                .code = exe.code,
-                .pc = start_pc,
-            };
+            var state = try Env.State.init(ally, exe, start_pc);
+            defer state.deinit(ally);
+
             try simple.env.call(&state, 0);
             try simple.run(&state);
 
