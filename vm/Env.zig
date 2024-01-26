@@ -12,6 +12,10 @@ const Unit = target.Unit;
 
 // utils =======================================================================
 
+fn align8(comptime T: type, value: T) T {
+    return std.mem.alignForward(T, value, 8);
+}
+
 fn ptrAdd(comptime T: type, ptr: T, offset: isize) T {
     std.debug.assert(@typeInfo(T) == .Pointer);
 
@@ -33,19 +37,60 @@ pub const Error = error{
 };
 
 pub const State = struct {
-    /// loaded code
-    code: []const u8,
+    /// current env memory
+    ///
+    /// *code is loaded to offset 0*
+    memory: []align(8) u8,
     /// program counter
-    pc: usize,
+    pc: u32,
+
+    code_len: u32,
+    /// data segment offset
+    data: u32,
+    /// bss segment offset
+    bss: u32,
+
+    pub fn init(
+        ally: Allocator,
+        unit: Unit,
+        initial_pc: u32,
+    ) Allocator.Error!State {
+        const code_len: u32 = @intCast(unit.code.len);
+        const data_len: u32 = @intCast(unit.data.len);
+
+        const data_offset = align8(u32, code_len);
+        const bss_offset = align8(u32, data_len + data_offset);
+        const size = bss_offset + unit.bss;
+
+        const memory = try ally.alignedAlloc(u8, 8, size);
+        @memcpy(memory[0..code_len], unit.code);
+        @memcpy(memory[data_offset .. data_offset + unit.data.len], unit.data);
+
+        return State{
+            .memory = memory,
+            .pc = initial_pc,
+            .code_len = code_len,
+            .data = data_offset,
+            .bss = bss_offset,
+        };
+    }
+
+    pub fn deinit(state: State, ally: Allocator) void {
+        ally.free(state.memory);
+    }
+
+    fn stackSlice(state: State) []align(8) u8 {
+        return state.memory[state.stack..];
+    }
 
     fn readByte(state: *State) u8 {
         defer state.pc += 1;
-        return state.code[state.pc];
+        return state.memory[state.pc];
     }
 
     fn readNBytes(state: *State, comptime N: comptime_int) [N]u8 {
         defer state.pc += N;
-        const slice = state.code[state.pc .. state.pc + N];
+        const slice = state.memory[state.pc .. state.pc + N];
         const ptr: *const [N]u8 = @ptrCast(slice.ptr);
         return ptr.*;
     }
@@ -61,7 +106,7 @@ pub const Frame = struct {
     pub const aligned_size = Stack.aligned8Size(Frame);
 
     base: [*]align(8) u8,
-    pc: usize,
+    pc: u32,
 };
 
 /// operation stack
@@ -92,13 +137,13 @@ const Stack = struct {
     /// size of T when accounting for 8-bit alignment
     fn aligned8Size(comptime T: type) comptime_int {
         comptime {
-            return std.mem.alignForward(usize, @sizeOf(T), 8);
+            return align8(usize, @sizeOf(T));
         }
     }
 
     /// reserve some bytes from the stack
     fn reserve(self: *Stack, nbytes: usize) Error!void {
-        const sz = std.mem.alignForward(usize, nbytes, 8);
+        const sz = align8(usize, nbytes);
         if (self.used() + sz > self.mem.len) {
             return Error.VmStackOverflow;
         }
@@ -108,7 +153,7 @@ const Stack = struct {
 
     /// drop some bytes from the stack
     fn vacate(self: *Stack, nbytes: usize) Error!void {
-        const sz = std.mem.alignForward(usize, nbytes, 8);
+        const sz = align8(usize, nbytes);
         if (self.used() < sz) {
             return Error.VmStackUnderflow;
         }
@@ -191,7 +236,7 @@ pub fn call(env: *Env, state: *State, dest: u32) Error!void {
 
 /// writes the next op to stderr for debugging
 fn dumpNext(env: *const Env, state: State) void {
-    const code = state.code[state.pc..];
+    const code = state.memory[state.pc..];
     const byteop: ByteOp = @bitCast(code[0]);
     const extra = code[1 .. 1 + byteop.extraBytes()];
 
@@ -247,7 +292,9 @@ fn dumpStack(env: *const Env) void {
 
 /// execute ops until complete with state provided
 pub fn run(env: *Env, state: *State) Error!void {
-    while (state.pc < state.code.len) {
+    while (state.pc < state.code_len) {
+        dumpNext(env, state.*);
+
         const byte = state.readByte();
         const sub = byte_subs[byte].?;
 
@@ -255,13 +302,20 @@ pub fn run(env: *Env, state: *State) Error!void {
     }
 }
 
-pub const ExecError = Error || error{
+pub const ExecError = Allocator.Error || Error || error{
     NoSuchFunction,
     NotAFunction,
 };
 
 /// execute a function exported from a unit
-pub fn exec(env: *Env, unit: Unit, name: []const u8) ExecError!void {
+///
+/// *allocator is used to allocate state memory*
+pub fn exec(
+    env: *Env,
+    ally: Allocator,
+    unit: Unit,
+    name: []const u8,
+) ExecError!void {
     const loc = unit.get(name) orelse {
         return ExecError.NoSuchFunction;
     };
@@ -271,10 +325,8 @@ pub fn exec(env: *Env, unit: Unit, name: []const u8) ExecError!void {
 
     // add call frame from the end of the code so that execution stops cleanly
     // when returning from the exported function
-    var state = State{
-        .code = unit.code,
-        .pc = unit.code.len,
-    };
+    var state = try State.init(ally, unit, @intCast(unit.code.len));
+    defer state.deinit(ally);
     try env.call(&state, loc.offset);
 
     try env.run(&state);
@@ -361,6 +413,18 @@ const monomorphic_subs = struct {
     fn label(env: *Env, state: *State) Error!void {
         const dest = state.readValue(u32);
         try env.push(u32, dest);
+    }
+
+    fn data(env: *Env, state: *State) Error!void {
+        const offset = state.readValue(u32);
+        const dest = @intFromPtr(state.memory.ptr) + state.data + offset;
+        try env.push(usize, dest);
+    }
+
+    fn bss(env: *Env, state: *State) Error!void {
+        const offset = state.readValue(u32);
+        const dest = @intFromPtr(state.memory.ptr) + state.bss + offset;
+        try env.push(usize, dest);
     }
 
     fn dup(env: *Env, _: *State) Error!void {

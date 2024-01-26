@@ -20,7 +20,7 @@ pub const Location = struct {
         _: std.fmt.FormatOptions,
         writer: anytype,
     ) @TypeOf(writer).Error!void {
-        try writer.print("@{s}+{d}", .{@tagName(self.segment), self.offset});
+        try writer.print("@{s}+{d}", .{ @tagName(self.segment), self.offset });
     }
 };
 
@@ -107,7 +107,7 @@ pub const Builder = struct {
     ally: Allocator,
 
     code: std.ArrayListUnmanaged(u8) = .{},
-    data: std.ArrayListUnmanaged(u8) = .{},
+    data_seg: std.ArrayListUnmanaged(u8) = .{},
     bss: u32 = 0,
 
     /// stores labels as they get resolved
@@ -130,7 +130,7 @@ pub const Builder = struct {
         const ally = self.ally;
 
         self.code.deinit(ally);
-        self.data.deinit(ally);
+        self.data_seg.deinit(ally);
         self.labels.deinit(ally);
         self.exports.deinit(ally);
         self.symbols.deinit(ally);
@@ -173,7 +173,7 @@ pub const Builder = struct {
             .imports = try imports.toOwnedSlice(),
             .exports = try exports.toOwnedSlice(),
             .code = try ally.dupe(u8, self.code.items),
-            .data = try ally.dupe(u8, self.data.items),
+            .data = try ally.dupe(u8, self.data_seg.items),
             .bss = self.bss,
         };
     }
@@ -181,7 +181,7 @@ pub const Builder = struct {
     /// write a u32 to a location
     fn writeToLoc(self: Self, value: u32, dest: Location) void {
         const bytes: []u8 = switch (dest.segment) {
-            .data => self.data.items,
+            .data => self.data_seg.items,
             .code => self.code.items,
             .bss => unreachable,
         };
@@ -206,7 +206,7 @@ pub const Builder = struct {
         }
     }
 
-    pub const SymbolError = Allocator.Error || error {
+    pub const SymbolError = Allocator.Error || error{
         SymbolAlreadyDefined,
     };
 
@@ -270,7 +270,7 @@ pub const Builder = struct {
     pub fn resolve(self: *Self, lbl: Label, segment: Segment) void {
         const offset: u32 = switch (segment) {
             .code => @intCast(self.code.items.len),
-            .data => @intCast(self.data.items.len),
+            .data => @intCast(self.data_seg.items.len),
             .bss => self.bss,
         };
 
@@ -289,6 +289,18 @@ pub const Builder = struct {
         const lbl = try self.backref();
         self.resolve(lbl, segment);
         return lbl;
+    }
+
+    /// add data to globally loaded data
+    pub fn data(self: *Self, bytes: []const u8) Allocator.Error!void {
+        try self.data_seg.appendSlice(self.ally, bytes);
+
+        // ensure data remains aligned to 8 bytes
+        const len = self.data_seg.items.len;
+        const extra = std.mem.alignForward(usize, len, 8) - len;
+        if (extra > 0) {
+            try self.data_seg.appendNTimes(self.ally, undefined, extra);
+        }
     }
 
     /// compile an op to bytecode and add it to the builder's code
@@ -320,7 +332,7 @@ pub const Builder = struct {
             .enter => |stack_size| {
                 extra.appendSliceAssumeCapacity(std.mem.asBytes(&stack_size));
             },
-            .constant => |data| switch (data) {
+            .constant => |c| switch (c) {
                 inline else => |bytes| {
                     extra.appendSliceAssumeCapacity(&bytes);
                 },
@@ -334,10 +346,10 @@ pub const Builder = struct {
             .zero, .copy => |length| {
                 extra.appendSliceAssumeCapacity(std.mem.asBytes(&length));
             },
-            inline .label, .jump, .jz, .jnz => |data, tag| {
+            inline .label, .data, .bss, .jump, .jz, .jnz => |meta, tag| {
                 const lbl: Label = switch (comptime tag) {
-                    .label, .jump => data,
-                    .jz, .jnz => data.dest,
+                    .label, .data, .bss, .jump => meta,
+                    .jz, .jnz => meta.dest,
                     else => unreachable,
                 };
 
@@ -374,8 +386,8 @@ pub const Builder = struct {
         const slice: []u8 = switch (meta) {
             inline else => |*arr| arr,
         };
-        const data = std.mem.asBytes(&value);
-        @memcpy(slice, data);
+        const bytes = std.mem.asBytes(&value);
+        @memcpy(slice, bytes);
 
         try self.op(.{ .constant = meta });
     }

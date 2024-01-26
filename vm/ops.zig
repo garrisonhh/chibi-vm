@@ -18,9 +18,12 @@ pub const Opcode = enum(u6) {
 
     /// read value bytes from code and push to stack
     constant,
-    /// read code loc from code and push to stack
-    /// TODO similar ops for data and bss
+    /// read code loc from code and push ptr to stack
     label,
+    /// read bss loc from code and push ptr to stack
+    data,
+    /// read bss loc from code and push ptr to stack
+    bss,
     /// duplicates a stack value
     dup,
     /// remove a stack value
@@ -106,12 +109,16 @@ pub const Opcode = enum(u6) {
             .enter => .{ .inputs = 0, .outputs = 0, .sized = false },
             .ret => .{ .inputs = 1, .outputs = 0, .sized = false },
             .constant => .{ .inputs = 0, .outputs = 1, .sized = true },
-            .label => .{ .inputs = 0, .outputs = 1, .sized = false },
             .dup => .{ .inputs = 1, .outputs = 2, .sized = false },
             .drop => .{ .inputs = 1, .outputs = 0, .sized = false },
             .local => .{ .inputs = 0, .outputs = 1, .sized = false },
             .load => .{ .inputs = 1, .outputs = 1, .sized = true },
             .store => .{ .inputs = 2, .outputs = 0, .sized = true },
+
+            .label,
+            .data,
+            .bss,
+            => .{ .inputs = 0, .outputs = 1, .sized = false },
 
             .add,
             .sub,
@@ -232,6 +239,8 @@ pub const ByteOp = packed struct(u8) {
             .store,
             => 2,
             .label,
+            .data,
+            .bss,
             .zero,
             .copy,
             .jump,
@@ -271,6 +280,8 @@ pub const Op = union(Opcode) {
     ret: u8,
     constant: Constant,
     label: Label,
+    data: Label,
+    bss: Label,
     dup,
     drop,
     add: Width,

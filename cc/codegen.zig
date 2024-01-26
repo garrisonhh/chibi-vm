@@ -11,6 +11,9 @@ const vm = @import("vm");
 const Width = vm.Width;
 const Op = vm.Op;
 const Builder = vm.Builder;
+const Segment = vm.Segment;
+
+const Globals = std.StringHashMap(Segment);
 
 const Context = struct {
     const Local = struct {
@@ -23,6 +26,14 @@ const Context = struct {
     ret_params: u8,
     /// maps locals to metadata
     locals: Locals = .{},
+    globals: *const Globals,
+
+    fn init(globals: *const Globals, ret_params: u8) Context {
+        return Context{
+            .ret_params = ret_params,
+            .globals = globals,
+        };
+    }
 
     fn deinit(ctx: *Context, ally: Allocator) void {
         ctx.locals.deinit(ally);
@@ -50,7 +61,23 @@ fn getIntSignedness(t: Type) std.builtin.Signedness {
 
 // lowering ====================================================================
 
-pub const Error = Allocator.Error || UnimplementedError;
+pub const Error = Allocator.Error || Builder.SymbolError ||  UnimplementedError;
+
+/// lower a global var
+fn lowerGlobalData(
+    b: *Builder,
+    globals: *Globals,
+    name: []const u8,
+    meta: AstObject.Var,
+) Error!void {
+    const bytes = meta.data orelse return;
+
+    // TODO respect static
+    _ = try b.define(name, .exported, .data);
+    try b.data(bytes);
+
+    try globals.put(name, .data);
+}
 
 /// lower a node as its address (for lvalues, for example)
 fn lowerAddr(
@@ -80,9 +107,14 @@ fn lowerAddr(
         .@"var" => |obj| {
             if (ctx.locals.get(obj.name)) |local| {
                 try b.op(.{ .local = local.offset });
-            } else {
+            } else if (ctx.globals.get(obj.name)) |segment| {
                 const lbl = try b.symbol(obj.name);
-                try b.op(.{ .label = lbl });
+                const op: Op = switch (segment) {
+                    .code => .{ .label = lbl },
+                    .data => .{ .data = lbl },
+                    .bss => .{ .bss = lbl },
+                };
+                try b.op(op);
             }
         },
         .member => |access| {
@@ -134,7 +166,6 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
     switch (node.data) {
         .assign,
         .deref,
-        .@"var",
         .member,
         => try lowerAddrLoad(b, ctx, node),
         .addr => |child| try lowerAddr(b, ctx, child),
@@ -397,6 +428,20 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
                 try unimplemented("global namespace", .{});
             }
         },
+        .@"var" => |meta| {
+            if (ctx.locals.get(meta.name)) |local| {
+                try b.op(.{ .local = local.offset });
+                try lowerLoad(b, meta.ty);
+            } else if (ctx.globals.get(meta.name)) |segment| {
+                const lbl = try b.symbol(meta.name);
+                const op: Op = switch (segment) {
+                    .code => .{ .label = lbl },
+                    .data => .{ .data = lbl },
+                    .bss => .{ .bss = lbl },
+                };
+                try b.op(op);
+            }
+        },
 
         else => {
             try unimplemented("{}", .{@as(std.meta.Tag(Node.Data), node.data)});
@@ -406,13 +451,15 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
 
 fn lowerFunction(
     b: *Builder,
+    globals: *Globals,
     name: []const u8,
     ty: Type,
     func: AstObject.Func,
 ) !void {
-    var ctx = Context{
-        .ret_params = @intCast(func.params.len),
-    };
+    try globals.put(name, .code);
+
+    const ret_params: u8 = @intCast(func.params.len);
+    var ctx = Context.init(globals, ret_params);
     defer ctx.deinit(b.ally);
 
     // params are pushed in order below the stack frame
@@ -459,6 +506,7 @@ fn lowerFunction(
     // write code
     // TODO respect static functions with ns vvv
     _ = try b.define(name, .exported, .code);
+
     try b.op(.{ .enter = stack_size });
 
     for (func.body) |node| {
@@ -476,12 +524,15 @@ pub fn lower(ally: Allocator, ast: []const frontend.Object) !vm.Unit {
     var b = Builder.init(ally);
     defer b.deinit();
 
+    var globals = Globals.init(ally);
+    defer globals.deinit();
+
     // ast comes in reverse order
     var iter = std.mem.reverseIterator(ast);
     while (iter.next()) |obj| {
         switch (obj.data) {
-            .@"var" => {}, // TODO
-            .func => |func| try lowerFunction(&b, obj.name, obj.ty, func),
+            .@"var" => |meta| try lowerGlobalData(&b, &globals, obj.name, meta),
+            .func => |func| try lowerFunction(&b, &globals, obj.name, obj.ty, func),
         }
     }
 

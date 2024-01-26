@@ -42,7 +42,7 @@ const simple = struct {
         var builder = Builder.init(ally);
         defer builder.deinit();
 
-        _ =  try builder.define(func_name, .exported, .code);
+        _ = try builder.define(func_name, .exported, .code);
         for (code) |o| {
             try builder.op(o);
         }
@@ -62,10 +62,10 @@ const simple = struct {
         std.debug.assert(unit.isResolved());
 
         const loc = unit.get(func_name).?;
-        var state = Env.State{
-            .code = unit.code,
-            .pc = loc.offset,
-        };
+
+        var state = try Env.State.init(ally, unit);
+        defer state.deinit();
+        state.pc = loc.offset;
 
         try env.run(&state);
     }
@@ -1039,6 +1039,9 @@ test "label" {
         try simple.expect(u32, 6 + @as(u32, @intCast(n)));
     }
 }
+
+// TODO test data
+// TODO test bss
 
 test "call" {
     try simple.init();
