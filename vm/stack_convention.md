@@ -6,6 +6,7 @@ conventions.
 ## implementation
 
 when calling, the caller...
+
 1. pushes arguments in order, each should be 8-byte aligned
 2. pushes the stack base and return location (also 8-byte aligned)
 3. jumps to the function label
@@ -14,6 +15,7 @@ the callee can then reserve as much stack as required, and parameter values
 can be accessed by peeking at the parameter location relative to the
 
 when returning, the callee...
+
 1. pops the return value
 2. sets the stack top to the stack base
 3. pops the previous stack base and return location and overwrites the program

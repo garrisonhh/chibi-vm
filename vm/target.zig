@@ -5,6 +5,7 @@ const ops = @import("ops.zig");
 const Width = ops.Width;
 const Op = ops.Op;
 const ByteOp = ops.ByteOp;
+const Env = @import("Env.zig");
 
 /// addressable spaces within vm translation units and executable modules
 pub const Segment = enum { code, data, bss };
@@ -41,20 +42,30 @@ const Symbol = struct {
     loc: Location,
 };
 
-/// a linkable and/or executable bytecode translation unit
+/// linkable bytecode translation unit (kind of like an object or a library)
 pub const Unit = struct {
     const Import = struct {
         name: []const u8,
         /// write the u32 offset of the label to these locations to link
-        backrefs: []const Location,
+        refs: []const Location,
+    };
+
+    const Relocation = struct {
+        loc: Location,
+        /// write the u32 offset of the label to these locations to link
+        refs: []const Location,
     };
 
     /// symbols which must be resolved before execution
     imports: []const Import,
-    /// symbols made available by this module for other modules
+    /// symbols exported by this unit for linking to other units
     /// TODO use some kind of immutable hashmap for this
     exports: []const Symbol,
-    /// bytecode
+    /// list of locations that need to be linked internally once segment offsets
+    /// are known
+    relocations: []const Relocation,
+
+    /// unlinked bytecode
     code: []const u8,
     /// initialized globally accessible memory
     data: []const u8,
@@ -62,27 +73,45 @@ pub const Unit = struct {
     bss: u32,
 
     pub fn deinit(self: Unit, ally: Allocator) void {
-        for (self.imports) |import| ally.free(import.backrefs);
+        for (self.imports) |import| ally.free(import.refs);
         ally.free(self.imports);
+        for (self.relocations) |relocation| ally.free(relocation.refs);
+        ally.free(self.relocations);
         ally.free(self.exports);
         ally.free(self.code);
         ally.free(self.data);
     }
+};
 
-    /// is this unit ready to execute
-    pub fn isResolved(unit: Unit) bool {
-        return unit.imports.len == 0;
+/// the fully linked, executable bytecode format
+pub const Module = struct {
+    const Export = struct {
+        name: []const u8,
+        loc: Location,
+    };
+
+    exports: []const Export,
+    code: []const u8,
+    data: []const u8,
+    bss: u32,
+
+    pub fn deinit(mod: Module, ally: Allocator) void {
+        ally.free(mod.exports);
+        ally.free(mod.code);
+        ally.free(mod.data);
     }
 
     /// get the location of an export
-    pub fn get(unit: Unit, name: []const u8) ?Location {
-        return for (unit.exports) |sym| {
-            if (std.mem.eql(u8, sym.name, name)) {
-                break sym.loc;
+    pub fn get(mod: Module, name: []const u8) ?Location {
+        return for (mod.exports) |x| {
+            if (std.mem.eql(u8, x.name, name)) {
+                break x.loc;
             }
         } else null;
     }
 };
+
+// =============================================================================
 
 /// builder builds a translation unit
 pub const Builder = struct {
@@ -91,6 +120,10 @@ pub const Builder = struct {
     /// refers to a unique location, which may be currently unknown
     pub const Label = struct {
         index: usize,
+
+        pub fn eql(a: Label, b: Label) bool {
+            return a.index == b.index;
+        }
 
         pub fn format(
             self: Label,
@@ -114,12 +147,10 @@ pub const Builder = struct {
     labels: std.ArrayListUnmanaged(?Location) = .{},
     /// resolved symbols originating from this unit
     exports: std.StringHashMapUnmanaged(Visibility) = .{},
-    /// all symbols, resolved or unresolved. may be imported or refer to an
-    /// exported name.
+    /// all symbols. may be imported or refer to an exported name
     symbols: std.StringHashMapUnmanaged(Label) = .{},
-    /// maps backref label -> locations to be overwritten
-    /// unresolved labels internal to the unit. all must be resolved before
-    /// building final unit.
+    /// maps backref label -> locations to be overwritten. becomes relocations
+    /// when built.
     backrefs: std.AutoHashMapUnmanaged(Label, Backrefs) = .{},
 
     pub fn init(ally: Allocator) Self {
@@ -143,22 +174,84 @@ pub const Builder = struct {
     /// create a translation unit with the builder's data, owned by the
     /// allocator provided
     pub fn build(self: Self, ally: Allocator) Allocator.Error!Unit {
-        self.link();
+        // collect backrefs as relocations
+        var relocs = std.AutoHashMap(Location, Backrefs).init(ally);
+        defer {
+            var values = relocs.valueIterator();
+            while (values.next()) |refs| refs.deinit(ally);
+            relocs.deinit();
+        }
 
+        var backrefs = self.backrefs.iterator();
+        while (backrefs.next()) |entry| {
+            const lbl = entry.key_ptr.*;
+            const list = entry.value_ptr;
+
+            const loc = self.labels.items[lbl.index] orelse {
+                // this must be an imported symbol, otherwise there has been
+                // a mistake in code generation
+                if (in_debug) check: {
+                    var imports = self.symbols.valueIterator();
+                    while (imports.next()) |imported| {
+                        if (imported.eql(lbl)) {
+                            break :check;
+                        }
+                    }
+
+                    std.debug.panic("unresolved label: {}", .{lbl});
+                }
+
+                continue;
+            };
+
+            const res = try relocs.getOrPut(loc);
+            if (!res.found_existing) res.value_ptr.* = .{};
+            try res.value_ptr.appendSlice(ally, list.items);
+        }
+
+        // collect imports, making them relocations if possible
         var imports = std.ArrayList(Unit.Import).init(ally);
         defer imports.deinit();
 
-        if (self.symbols.count() > self.exports.count()) {
-            @panic("TODO collect imports");
+        var symbols = self.symbols.iterator();
+        while (symbols.next()) |entry| {
+            const name = entry.key_ptr.*;
+            const lbl = entry.value_ptr.*;
+
+            // get refs for this import
+            const refs = self.backrefs.get(lbl) orelse {
+                continue;
+            };
+
+            // if this is already resolved, it can just be a relocation
+            if (self.labels.items[lbl.index]) |loc| {
+                const res = try relocs.getOrPut(loc);
+                if (!res.found_existing) res.value_ptr.* = .{};
+                try res.value_ptr.appendSlice(ally, refs.items);
+
+                continue;
+            }
+
+            // add it to the import list
+            try imports.append(Unit.Import{
+                .name = name,
+                .refs = try ally.dupe(Location, refs.items),
+            });
         }
 
+        // collect exports
         var exports = std.ArrayList(Symbol).init(ally);
         defer exports.deinit();
 
         var entries = self.exports.iterator();
         while (entries.next()) |entry| {
-            const name = entry.key_ptr.*;
+            // private symbols should already be resolved as relocations, if
+            // they are used at all
             const vis = entry.value_ptr.*;
+            if (vis == .private) continue;
+
+            // module-and-exported-level symbols must be exported
+            const name = entry.key_ptr.*;
             const lbl = self.symbols.get(name).?;
             const loc = self.labels.items[lbl.index].?;
 
@@ -169,41 +262,28 @@ pub const Builder = struct {
             });
         }
 
+        // transform relocations into the shape unit wants
+        var reloc_list = std.ArrayList(Unit.Relocation).init(ally);
+        defer reloc_list.deinit();
+
+        var reloc_iter = relocs.iterator();
+        while (reloc_iter.next()) |entry| {
+            if (entry.value_ptr.items.len == 0) continue;
+
+            try reloc_list.append(Unit.Relocation{
+                .loc = entry.key_ptr.*,
+                .refs = try entry.value_ptr.toOwnedSlice(ally)
+            });
+        }
+
         return Unit{
             .imports = try imports.toOwnedSlice(),
             .exports = try exports.toOwnedSlice(),
+            .relocations = try reloc_list.toOwnedSlice(),
             .code = try ally.dupe(u8, self.code.items),
             .data = try ally.dupe(u8, self.data_seg.items),
             .bss = self.bss_size,
         };
-    }
-
-    /// write a u32 to a location
-    fn writeToLoc(self: Self, value: u32, dest: Location) void {
-        const bytes: []u8 = switch (dest.segment) {
-            .data => self.data_seg.items,
-            .code => self.code.items,
-            .bss => unreachable,
-        };
-
-        const slice = bytes[dest.offset .. dest.offset + @sizeOf(u32)];
-        @memcpy(slice, std.mem.asBytes(&value));
-    }
-
-    /// write all resolved labels to their backref locations
-    fn link(self: Self) void {
-        for (self.labels.items, 0..) |maybe_loc, i| {
-            const lbl = Label{ .index = i };
-            const loc = maybe_loc orelse {
-                if (!in_debug) unreachable;
-                std.debug.panic("unresolved label: {}", .{lbl});
-            };
-
-            const backrefs = self.backrefs.get(lbl) orelse return;
-            for (backrefs.items) |br| {
-                self.writeToLoc(loc.offset, br);
-            }
-        }
     }
 
     pub const SymbolError = Allocator.Error || error{
@@ -395,6 +475,14 @@ pub const Builder = struct {
         try self.code.appendSlice(ally, extra.slice());
     }
 
+    /// sugar for pushing a function parameter to the stack
+    pub fn param(self: *Self, index: usize) Allocator.Error!void {
+        const frame_size: i16 = @intCast(Env.Frame.aligned_size);
+        const param_offset: i16 = 8 * (1 + @as(i16, @intCast(index)));
+        const local_offset = -(frame_size + param_offset);
+        try self.op(.{ .local = local_offset });
+    }
+
     /// sugar for the constant op
     pub fn constant(
         self: *Self,
@@ -416,30 +504,192 @@ pub const Builder = struct {
     }
 };
 
+pub const LinkError = Allocator.Error || error {
+    ExportAlreadyDefined,
+    SymbolNotFound,
+};
+
+/// offset a location
+fn absoluteLocation(
+    code_offset: u32,
+    data_offset: u32,
+    bss_offset: u32,
+    loc: Location,
+) Location {
+    const offset = switch (loc.segment) {
+        .code => code_offset,
+        .data => data_offset,
+        .bss => bss_offset,
+    };
+    return Location{
+        .segment = loc.segment,
+        .offset = offset + loc.offset,
+    };
+}
+
+/// write a location to another location in code or data
+fn stitch(
+    src: Location,
+    dst: Location,
+    code: []u8,
+    data: []u8,
+) void {
+    const src_offset: u32 = @intCast(src.offset);
+    const src_offset_bytes = std.mem.asBytes(&src_offset);
+
+    const slice = switch (dst.segment) {
+        .code => code,
+        .data => data,
+        .bss => unreachable,
+    };
+    const dst_bytes = slice[dst.offset .. dst.offset + @sizeOf(u32)];
+    @memcpy(dst_bytes, src_offset_bytes);
+}
+
 /// link multiple units into a single unit
-pub fn link(ally: Allocator, units: []const Unit) Allocator.Error!Unit {
-    std.debug.assert(units.len == 1);
+pub fn link(ally: Allocator, units: []const Unit) LinkError!Module {
+    // dump unit data TODO remove
+    for (units, 0..) |unit, i| {
+        std.debug.print("[UNIT {}]\n", .{i});
 
-    // TODO actually link
+        std.debug.print("imports:\n", .{});
+        for (unit.imports) |import| {
+            std.debug.print("  `{s}` ->", .{import.name});
+            for (import.refs) |loc| std.debug.print(" {}", .{loc});
+            std.debug.print("\n", .{});
+        }
 
-    const unit = units[0];
-    std.debug.assert(unit.imports.len == 0);
+        std.debug.print("exports:\n", .{});
+        for (unit.exports) |sym| {
+            std.debug.print("  {s} `{s}` {}\n", .{@tagName(sym.vis), sym.name, sym.loc});
+        }
+
+        std.debug.print("relocations:\n", .{});
+        for (unit.relocations) |relocation| {
+            std.debug.print("  {} ->", .{relocation.loc});
+            for (relocation.refs) |loc| std.debug.print(" {}", .{loc});
+            std.debug.print("\n", .{});
+        }
+
+        std.debug.print("code:\n", .{});
+
+        var iter = ops.iterate(unit.code);
+        while (iter.next()) |encoded| {
+            std.debug.print("  {d: >4} | {}\n", .{encoded.offset, encoded});
+        }
+
+        std.debug.print("data: {d}\n", .{unit.data});
+        std.debug.print("bss: {d}\n", .{unit.bss});
+
+        std.debug.print("\n", .{});
+    }
+
+    // collect public symbols and determine their absolute locations
+    var symbols = std.StringHashMap(Symbol).init(ally);
+    defer symbols.deinit();
+
+    var symbol_code_offset: u32 = 0;
+    var symbol_data_offset: u32 = 0;
+    var symbol_bss_offset: u32 = 0;
+
+    for (units) |unit| {
+        for (unit.exports) |x| {
+            const res = try symbols.getOrPut(x.name);
+            if (res.found_existing) {
+                return LinkError.ExportAlreadyDefined;
+            }
+
+            const segment_offset = switch (x.loc.segment) {
+                .code => symbol_code_offset,
+                .data => symbol_data_offset,
+                .bss => symbol_bss_offset,
+            };
+            const abs_loc = Location{
+                .segment = x.loc.segment,
+                .offset = segment_offset + x.loc.offset,
+            };
+
+            std.debug.print("LINKING PUBLIC `{s}` -> {}\n", .{x.name, abs_loc});
+
+            res.value_ptr.* = Symbol{
+                .name = x.name,
+                .vis = x.vis,
+                .loc = abs_loc,
+            };
+        }
+
+        symbol_code_offset += @intCast(unit.code.len);
+        symbol_data_offset += @intCast(unit.data.len);
+        symbol_bss_offset += unit.bss;
+    }
+
+    // stitch together unit data and write module location to unit relocations
+    var code = std.ArrayList(u8).init(ally);
+    defer code.deinit();
+    var data = std.ArrayList(u8).init(ally);
+    defer data.deinit();
+    var bss: u32 = 0;
+
+    for (units) |unit| {
+        const code_offset: u32 = @intCast(code.items.len);
+        const data_offset: u32 = @intCast(data.items.len);
+        const bss_offset = bss;
+
+        try code.appendSlice(unit.code);
+        try data.appendSlice(unit.data);
+        bss += unit.bss;
+
+        for (unit.relocations) |reloc| {
+            for (reloc.refs) |ref| {
+                const src = absoluteLocation(code_offset, data_offset, bss_offset, reloc.loc);
+                const dst = absoluteLocation(code_offset, data_offset, bss_offset, ref);
+                stitch(src, dst, code.items, data.items);
+            }
+        }
+
+        for (unit.imports) |import| {
+            const meta = symbols.get(import.name) orelse {
+                return LinkError.SymbolNotFound;
+            };
+            const loc = meta.loc;
+
+            for (import.refs) |ref| {
+                const dst = absoluteLocation(code_offset, data_offset, bss_offset, ref);
+                stitch(loc, dst, code.items, data.items);
+            }
+        }
+    }
+
+    // collect exported symbols
+    var exports = std.ArrayList(Module.Export).init(ally);
+    defer exports.deinit();
+
+    var public_symbols = symbols.valueIterator();
+    while (public_symbols.next()) |symbol| {
+        if (symbol.vis == .exported) {
+            try exports.append(Module.Export{
+                .name = symbol.name,
+                .loc = symbol.loc,
+            });
+        }
+    }
+
+    const mod = Module{
+        .exports = try exports.toOwnedSlice(),
+        .code = try code.toOwnedSlice(),
+        .data = try data.toOwnedSlice(),
+        .bss = bss,
+    };
 
     // dump linked code TODO remove
     std.debug.print("[linked]\n", .{});
 
-    var iter = ops.iterate(unit.code);
+    var iter = ops.iterate(mod.code);
     while (iter.next()) |encoded| {
         std.debug.print("{d: >4} | {}\n", .{encoded.offset, encoded});
     }
 
     std.debug.print("\n", .{});
 
-    return Unit{
-        .imports = &.{},
-        .exports = try ally.dupe(Symbol, unit.exports),
-        .data = try ally.dupe(u8, unit.data),
-        .code = try ally.dupe(u8, unit.code),
-        .bss = unit.bss,
-    };
+    return mod;
 }

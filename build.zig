@@ -66,13 +66,12 @@ pub fn build(b: *std.Build) void {
 
     // vm tests
     const unit_tests = b.addTest(.{
-        .root_source_file = .{ .path = "vm/main.zig" },
+        .root_source_file = .{ .path = "vm/tests/tests.zig" },
         .target = target,
         .optimize = optimize,
     });
 
-    unit_tests.linkLibC();
-    unit_tests.addCSourceFiles(&chibi.c_sources, chibi.cFlags(optimize));
+    unit_tests.addModule("vm", vm);
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 

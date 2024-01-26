@@ -520,6 +520,11 @@ fn lowerFunction(
     }
 }
 
+fn lowerFunctionPredecl(b: *Builder, globals: *Globals, name: []const u8) !void {
+    _ = try b.symbol(name);
+    try globals.put(name, .code);
+}
+
 pub fn lower(ally: Allocator, ast: []const frontend.Object) !vm.Unit {
     var b = Builder.init(ally);
     defer b.deinit();
@@ -532,7 +537,13 @@ pub fn lower(ally: Allocator, ast: []const frontend.Object) !vm.Unit {
     while (iter.next()) |obj| {
         switch (obj.data) {
             .@"var" => |meta| try lowerGlobalData(&b, &globals, obj.name, meta),
-            .func => |func| try lowerFunction(&b, &globals, obj.name, obj.ty, func),
+            .func => |func| {
+                if (func.body.len > 0) {
+                    try lowerFunction(&b, &globals, obj.name, obj.ty, func);
+                } else {
+                    try lowerFunctionPredecl(&b, &globals, obj.name);
+                }
+            },
         }
     }
 

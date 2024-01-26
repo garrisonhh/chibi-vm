@@ -8,7 +8,7 @@ const ByteOp = ops.ByteOp;
 const Opcode = ops.Opcode;
 const Width = ops.Width;
 const target = @import("target.zig");
-const Unit = target.Unit;
+const Module = target.Module;
 
 // utils =======================================================================
 
@@ -42,7 +42,7 @@ pub const Error = error{
 /// errors should be handled by returning them by value into the vm.
 pub const NativeFn = fn(*Env) Error!void;
 
-/// encodes env state that only persists during execution of a unit
+/// encodes env state that only persists during execution of module code
 pub const State = struct {
     /// current env memory
     ///
@@ -59,19 +59,19 @@ pub const State = struct {
 
     pub fn init(
         ally: Allocator,
-        unit: Unit,
+        mod: Module,
         initial_pc: u32,
     ) Allocator.Error!State {
-        const code_len: u32 = @intCast(unit.code.len);
-        const data_len: u32 = @intCast(unit.data.len);
+        const code_len: u32 = @intCast(mod.code.len);
+        const data_len: u32 = @intCast(mod.data.len);
 
         const data_offset = align8(u32, code_len);
         const bss_offset = align8(u32, data_len + data_offset);
-        const size = bss_offset + unit.bss;
+        const size = bss_offset + mod.bss;
 
         const memory = try ally.alignedAlloc(u8, 8, size);
-        @memcpy(memory[0..code_len], unit.code);
-        @memcpy(memory[data_offset .. data_offset + unit.data.len], unit.data);
+        @memcpy(memory[0..code_len], mod.code);
+        @memcpy(memory[data_offset .. data_offset + mod.data.len], mod.data);
 
         return State{
             .memory = memory,
@@ -312,16 +312,16 @@ pub const ExecError = Allocator.Error || Error || error{
     NotAFunction,
 };
 
-/// execute a function exported from a unit
+/// execute a function exported from a module
 ///
 /// *allocator is used to allocate state memory*
 pub fn exec(
     env: *Env,
     ally: Allocator,
-    unit: Unit,
+    mod: Module,
     name: []const u8,
 ) ExecError!void {
-    const loc = unit.get(name) orelse {
+    const loc = mod.get(name) orelse {
         return ExecError.NoSuchFunction;
     };
     if (loc.segment != .code) {
@@ -330,7 +330,7 @@ pub fn exec(
 
     // add call frame from the end of the code so that execution stops cleanly
     // when returning from the exported function
-    var state = try State.init(ally, unit, @intCast(unit.code.len));
+    var state = try State.init(ally, mod, @intCast(mod.code.len));
     defer state.deinit(ally);
     try env.call(&state, loc.offset);
 

@@ -28,7 +28,7 @@ with an interface that is pleasant to hack on.
 - [x] elf-like segmented process memory mapping
 - [x] very good test coverage
 - [x] native function bindings
-- [ ] linking multiple translation units, allowing for parallelism
+- [x] linking multiple translation units, allowing for parallelism
 
 ### non-goals
 

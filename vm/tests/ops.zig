@@ -14,14 +14,13 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ops = @import("ops.zig");
-const Width = ops.Width;
-const Op = ops.Op;
-const Opcode = ops.Opcode;
-const target = @import("target.zig");
-const Builder = target.Builder;
-const Unit = target.Unit;
-const Env = @import("Env.zig");
+const vm = @import("vm");
+const Width = vm.Width;
+const Op = vm.Op;
+const Opcode = vm.Opcode;
+const Builder = vm.Builder;
+const Module = vm.Module;
+const Env = vm.Env;
 
 const ally = std.testing.allocator;
 
@@ -38,7 +37,7 @@ const simple = struct {
         env.deinit(ally);
     }
 
-    fn build(code: []const Op) !Unit {
+    fn build(code: []const Op) !Module {
         var builder = Builder.init(ally);
         defer builder.deinit();
 
@@ -47,7 +46,10 @@ const simple = struct {
             try builder.op(o);
         }
 
-        return try builder.build(ally);
+        const unit = try builder.build(ally);
+        defer unit.deinit(ally);
+
+        return try vm.link(ally, &.{unit});
     }
 
     fn int(comptime w: Width) type {
@@ -58,13 +60,11 @@ const simple = struct {
         return std.meta.Int(.unsigned, @as(u16, w.bytes()) * 8);
     }
 
-    fn runUnit(unit: Unit) !void {
-        std.debug.assert(unit.isResolved());
-
-        const loc = unit.get(func_name).?;
+    fn runModule(mod: Module) !void {
+        const loc = mod.get(func_name).?;
         std.debug.assert(loc.segment == .code);
 
-        var state = try Env.State.init(ally, unit, loc.offset);
+        var state = try Env.State.init(ally, mod, loc.offset);
         defer state.deinit(ally);
 
         try env.run(&state);
@@ -407,7 +407,7 @@ fn applyVerifier(
         }
 
         const actual: Result = res: {
-            simple.runUnit(mod) catch |e| {
+            simple.runModule(mod) catch |e| {
                 break :res .{ .err = e };
             };
 
@@ -585,10 +585,10 @@ test "halt" {
     try simple.init();
     defer simple.deinit();
 
-    const exe = try simple.build(&.{.halt});
-    defer exe.deinit(ally);
+    const mod = try simple.build(&.{.halt});
+    defer mod.deinit(ally);
 
-    const result = simple.runUnit(exe);
+    const result = simple.runModule(mod);
     try std.testing.expectError(Env.Error.VmHalt, result);
 }
 
@@ -605,12 +605,12 @@ test "enter" {
     };
 
     for (cases) |reserve| {
-        const exe = try simple.build(&.{
+        const mod = try simple.build(&.{
             Op{ .enter = reserve },
         });
-        defer exe.deinit(ally);
+        defer mod.deinit(ally);
 
-        try simple.runUnit(exe);
+        try simple.runModule(mod);
 
         const expected = std.mem.alignForward(usize, reserve, 8);
         try simple.expectStackSize(expected);
@@ -623,11 +623,11 @@ test "dup" {
     try simple.init();
     defer simple.deinit();
 
-    const exe = try simple.build(&.{.dup});
-    defer exe.deinit(ally);
+    const mod = try simple.build(&.{.dup});
+    defer mod.deinit(ally);
 
     try simple.push(u64, 42);
-    try simple.runUnit(exe);
+    try simple.runModule(mod);
     try simple.expectStackSize(16);
     try simple.expect(u64, 42);
     try simple.expect(u64, 42);
@@ -638,12 +638,12 @@ test "drop" {
     try simple.init();
     defer simple.deinit();
 
-    const exe = try simple.build(&.{.drop});
-    defer exe.deinit(ally);
+    const mod = try simple.build(&.{.drop});
+    defer mod.deinit(ally);
 
     try simple.push(u64, 0);
     try simple.expectStackSize(8);
-    try simple.runUnit(exe);
+    try simple.runModule(mod);
     try simple.expectStackSize(0);
 }
 
@@ -668,10 +668,10 @@ test "constant" {
                 .constant = @unionInit(Op.Constant, @tagName(width), bytes),
             };
 
-            const exe = try simple.build(&.{op});
-            defer exe.deinit(ally);
+            const mod = try simple.build(&.{op});
+            defer mod.deinit(ally);
 
-            try simple.runUnit(exe);
+            try simple.runModule(mod);
             try simple.expectStackSize(8);
             try simple.expect(Bytes, bytes);
             try simple.expectStackSize(0);
@@ -690,12 +690,12 @@ test "local" {
     for (0..count) |_| {
         const offset = prng.random().int(i16);
 
-        const exe = try simple.build(&.{
+        const mod = try simple.build(&.{
             Op{ .local = offset },
         });
-        defer exe.deinit(ally);
+        defer mod.deinit(ally);
 
-        try simple.runUnit(exe);
+        try simple.runModule(mod);
 
         const base = @intFromPtr(simple.env.stack.base);
         const expected = if (offset > 0) pos: {
@@ -745,11 +745,11 @@ test "load" {
                 },
             };
 
-            const exe = try simple.build(&.{op});
-            defer exe.deinit(ally);
+            const mod = try simple.build(&.{op});
+            defer mod.deinit(ally);
 
             try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(data)));
-            try simple.runUnit(exe);
+            try simple.runModule(mod);
             try simple.expectStackSize(8);
             try simple.expect(Bytes, expected.*);
             try simple.expectStackSize(0);
@@ -793,12 +793,12 @@ test "store" {
                 },
             };
 
-            const exe = try simple.build(&.{op});
-            defer exe.deinit(ally);
+            const mod = try simple.build(&.{op});
+            defer mod.deinit(ally);
 
             try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(data)));
             try simple.push(Bytes, input);
-            try simple.runUnit(exe);
+            try simple.runModule(mod);
             try simple.expectStackSize(0);
 
             const actual: *const Bytes = @ptrCast(data[byte_offset .. byte_offset + nbytes]);
@@ -830,15 +830,15 @@ test "copy" {
         const dest = try ally.alloc(u8, data_len);
         defer ally.free(dest);
 
-        const exe = try simple.build(&.{
+        const mod = try simple.build(&.{
             .{ .copy = data_len },
         });
-        defer exe.deinit(ally);
+        defer mod.deinit(ally);
 
         const data_ptr: *anyopaque = @ptrCast(data);
         try simple.push(*anyopaque, data_ptr);
         try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(dest)));
-        try simple.runUnit(exe);
+        try simple.runModule(mod);
         try simple.expect(*anyopaque, data_ptr);
         try simple.expectStackSize(0);
 
@@ -866,14 +866,14 @@ test "zero" {
         defer ally.free(data);
         prng.random().bytes(data);
 
-        const exe = try simple.build(&.{
+        const mod = try simple.build(&.{
             .{ .zero = data_len },
         });
-        defer exe.deinit(ally);
+        defer mod.deinit(ally);
 
         const data_ptr: *anyopaque = @ptrCast(data);
         try simple.push(*anyopaque, data_ptr);
-        try simple.runUnit(exe);
+        try simple.runModule(mod);
         try simple.expect(*anyopaque, data_ptr);
         try simple.expectStackSize(0);
 
@@ -902,10 +902,13 @@ test "jump" {
 
         b.resolve(dest);
 
-        const exe = try b.build(ally);
-        defer exe.deinit(ally);
+        const unit = try b.build(ally);
+        defer unit.deinit(ally);
 
-        var state = try Env.State.init(ally, exe, 0);
+        const mod = try vm.link(ally, &.{unit});
+        defer mod.deinit(ally);
+
+        var state = try Env.State.init(ally, mod, 0);
         defer state.deinit(ally);
 
         try simple.run(&state);
@@ -934,16 +937,19 @@ test "jz" {
         _ = try b.define("zero", .exported, .code);
         try b.op(.halt);
 
-        const exe = try b.build(ally);
-        defer exe.deinit(ally);
+        const unit = try b.build(ally);
+        defer unit.deinit(ally);
 
-        const loc_nonzero = exe.get("nonzero").?;
-        const loc_zero = exe.get("zero").?;
+        const mod = try vm.link(ally, &.{unit});
+        defer mod.deinit(ally);
+
+        const loc_nonzero = mod.get("nonzero").?;
+        const loc_zero = mod.get("zero").?;
 
         for (0..2) |n| {
             try simple.push(I, @as(I, @intCast(n)));
 
-            var state = try Env.State.init(ally, exe, 0);
+            var state = try Env.State.init(ally, mod, 0);
             defer state.deinit(ally);
 
             const res = simple.run(&state);
@@ -979,16 +985,19 @@ test "jnz" {
         _ = try b.define("nonzero", .exported, .code);
         try b.op(.halt);
 
-        const exe = try b.build(ally);
-        defer exe.deinit(ally);
+        const unit = try b.build(ally);
+        defer unit.deinit(ally);
 
-        const loc_nonzero = exe.get("nonzero").?;
-        const loc_zero = exe.get("zero").?;
+        const mod = try vm.link(ally, &.{unit});
+        defer mod.deinit(ally);
+
+        const loc_nonzero = mod.get("nonzero").?;
+        const loc_zero = mod.get("zero").?;
 
         for (0..2) |n| {
             try simple.push(I, @as(I, @intCast(n)));
 
-            var state = try Env.State.init(ally, exe, 0);
+            var state = try Env.State.init(ally, mod, 0);
             defer state.deinit(ally);
 
             const res = simple.run(&state);
@@ -1024,10 +1033,13 @@ test "label" {
 
         b.resolve(dest);
 
-        const exe = try b.build(ally);
-        defer exe.deinit(ally);
+        const unit = try b.build(ally);
+        defer unit.deinit(ally);
 
-        var state = try Env.State.init(ally, exe, 0);
+        const mod = try vm.link(ally, &.{unit});
+        defer mod.deinit(ally);
+
+        var state = try Env.State.init(ally, mod, 0);
         defer state.deinit(ally);
 
         const res = simple.run(&state);
@@ -1046,10 +1058,13 @@ test "data" {
     const label = try b.data("hello, world");
     try b.op(.{ .data = label });
 
-    const exe = try b.build(ally);
-    defer exe.deinit(ally);
+    const unit = try b.build(ally);
+    defer unit.deinit(ally);
 
-    var state = try Env.State.init(ally, exe, 0);
+    const mod = try vm.link(ally, &.{unit});
+    defer mod.deinit(ally);
+
+    var state = try Env.State.init(ally, mod, 0);
     defer state.deinit(ally);
 
     try simple.run(&state);
@@ -1074,10 +1089,13 @@ test "bss" {
         .offset = 0,
     } });
 
-    const exe = try b.build(ally);
-    defer exe.deinit(ally);
+    const unit = try b.build(ally);
+    defer unit.deinit(ally);
 
-    var state = try Env.State.init(ally, exe, 0);
+    const mod = try vm.link(ally, &.{unit});
+    defer mod.deinit(ally);
+
+    var state = try Env.State.init(ally, mod, 0);
     defer state.deinit(ally);
 
     try simple.run(&state);
@@ -1101,10 +1119,13 @@ test "call" {
     try b.op(.halt);
     try b.op(.halt);
 
-    const exe = try b.build(ally);
-    defer exe.deinit(ally);
+    const unit = try b.build(ally);
+    defer unit.deinit(ally);
 
-    var state = try Env.State.init(ally, exe, 0);
+    const mod = try vm.link(ally, &.{unit});
+    defer mod.deinit(ally);
+
+    var state = try Env.State.init(ally, mod, 0);
     defer state.deinit(ally);
 
     const res = simple.run(&state);
@@ -1138,8 +1159,11 @@ test "ret" {
             try b.op(.{ .ret = @intCast(n) });
             try b.op(.halt);
 
-            const exe = try b.build(ally);
-            defer exe.deinit(ally);
+            const unit = try b.build(ally);
+            defer unit.deinit(ally);
+
+            const mod = try vm.link(ally, &.{unit});
+            defer mod.deinit(ally);
 
             const start_pc: u32 = std.math.maxInt(u32);
             const start_base = simple.env.stack.base;
@@ -1151,7 +1175,7 @@ test "ret" {
                 try simple.push(u64, val);
             }
 
-            var state = try Env.State.init(ally, exe, start_pc);
+            var state = try Env.State.init(ally, mod, start_pc);
             defer state.deinit(ally);
 
             try simple.env.call(&state, 0);
@@ -1182,10 +1206,13 @@ test "native_call" {
     try b.constant(*const Env.NativeFn, &nativeMulAdd);
     try b.op(.native_call);
 
-    const exe = try b.build(ally);
-    defer exe.deinit(ally);
+    const unit = try b.build(ally);
+    defer unit.deinit(ally);
 
-    var state = try Env.State.init(ally, exe, 0);
+    const mod = try vm.link(ally, &.{unit});
+    defer mod.deinit(ally);
+
+    var state = try Env.State.init(ally, mod, 0);
     defer state.deinit(ally);
 
     try simple.push(u64, 3);

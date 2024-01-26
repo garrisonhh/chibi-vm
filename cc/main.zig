@@ -16,7 +16,7 @@ comptime {
 fn compile(
     backing_ally: Allocator,
     sources: []const Source,
-) !vm.Unit {
+) !vm.Module {
     var arena = std.heap.ArenaAllocator.init(backing_ally);
     defer arena.deinit();
     const ally = arena.allocator();
@@ -37,8 +37,6 @@ fn compile(
 fn run(ally: Allocator, source_paths: []const [:0]const u8) !void {
     if (source_paths.len == 0) {
         usage(.run, "no source paths provided");
-    } else if (source_paths.len > 1) {
-        usage(.run, "more than one input file is not currently supported");
     }
 
     var arena = std.heap.ArenaAllocator.init(ally);

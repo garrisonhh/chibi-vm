@@ -768,6 +768,8 @@ pub const FrontendError = Allocator.Error || error{
 pub fn parse(ally: Allocator, source: Source) FrontendError![]const Object {
     const file = try loadSource(source);
 
+    std.debug.print("COMPILING {s}\n", .{source.name});
+
     // tokenize
     const raw_tokens = chibi.tokenize(file) orelse {
         // no tokens, TODO check for errors
