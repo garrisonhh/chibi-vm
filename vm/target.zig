@@ -108,7 +108,7 @@ pub const Builder = struct {
 
     code: std.ArrayListUnmanaged(u8) = .{},
     data_seg: std.ArrayListUnmanaged(u8) = .{},
-    bss: u32 = 0,
+    bss_size: u32 = 0,
 
     /// stores labels as they get resolved
     labels: std.ArrayListUnmanaged(?Location) = .{},
@@ -174,7 +174,7 @@ pub const Builder = struct {
             .exports = try exports.toOwnedSlice(),
             .code = try ally.dupe(u8, self.code.items),
             .data = try ally.dupe(u8, self.data_seg.items),
-            .bss = self.bss,
+            .bss = self.bss_size,
         };
     }
 
@@ -271,7 +271,7 @@ pub const Builder = struct {
         const offset: u32 = switch (segment) {
             .code => @intCast(self.code.items.len),
             .data => @intCast(self.data_seg.items.len),
-            .bss => self.bss,
+            .bss => self.bss_size,
         };
 
         const loc = Location{
@@ -285,6 +285,7 @@ pub const Builder = struct {
     }
 
     /// create and resolve a label
+    /// TODO make this code only?
     pub fn label(self: *Self, segment: Segment) Allocator.Error!Label {
         const lbl = try self.backref();
         self.resolve(lbl, segment);
@@ -292,6 +293,7 @@ pub const Builder = struct {
     }
 
     /// add data to globally loaded data
+    /// TODO make this return a data label
     pub fn data(self: *Self, bytes: []const u8) Allocator.Error!void {
         try self.data_seg.appendSlice(self.ally, bytes);
 
@@ -301,6 +303,14 @@ pub const Builder = struct {
         if (extra > 0) {
             try self.data_seg.appendNTimes(self.ally, undefined, extra);
         }
+    }
+
+    /// reserve uninitialized global memory
+    pub fn bss(self: *Self, size: usize) Allocator.Error!Label {
+        const lbl = self.label(.bss);
+        self.bss_size += @intCast(size);
+
+        return lbl;
     }
 
     /// compile an op to bytecode and add it to the builder's code

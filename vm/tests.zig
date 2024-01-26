@@ -585,7 +585,7 @@ test "halt" {
     try simple.init();
     defer simple.deinit();
 
-    var exe = try simple.build(&.{.halt});
+    const exe = try simple.build(&.{.halt});
     defer exe.deinit(ally);
 
     const result = simple.runUnit(exe);
@@ -605,7 +605,7 @@ test "enter" {
     };
 
     for (cases) |reserve| {
-        var exe = try simple.build(&.{
+        const exe = try simple.build(&.{
             Op{ .enter = reserve },
         });
         defer exe.deinit(ally);
@@ -623,7 +623,7 @@ test "dup" {
     try simple.init();
     defer simple.deinit();
 
-    var exe = try simple.build(&.{.dup});
+    const exe = try simple.build(&.{.dup});
     defer exe.deinit(ally);
 
     try simple.push(u64, 42);
@@ -638,7 +638,7 @@ test "drop" {
     try simple.init();
     defer simple.deinit();
 
-    var exe = try simple.build(&.{.drop});
+    const exe = try simple.build(&.{.drop});
     defer exe.deinit(ally);
 
     try simple.push(u64, 0);
@@ -668,7 +668,7 @@ test "constant" {
                 .constant = @unionInit(Op.Constant, @tagName(width), bytes),
             };
 
-            var exe = try simple.build(&.{op});
+            const exe = try simple.build(&.{op});
             defer exe.deinit(ally);
 
             try simple.runUnit(exe);
@@ -690,7 +690,7 @@ test "local" {
     for (0..count) |_| {
         const offset = prng.random().int(i16);
 
-        var exe = try simple.build(&.{
+        const exe = try simple.build(&.{
             Op{ .local = offset },
         });
         defer exe.deinit(ally);
@@ -745,7 +745,7 @@ test "load" {
                 },
             };
 
-            var exe = try simple.build(&.{op});
+            const exe = try simple.build(&.{op});
             defer exe.deinit(ally);
 
             try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(data)));
@@ -793,7 +793,7 @@ test "store" {
                 },
             };
 
-            var exe = try simple.build(&.{op});
+            const exe = try simple.build(&.{op});
             defer exe.deinit(ally);
 
             try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(data)));
@@ -830,7 +830,7 @@ test "copy" {
         const dest = try ally.alloc(u8, data_len);
         defer ally.free(dest);
 
-        var exe = try simple.build(&.{
+        const exe = try simple.build(&.{
             .{ .copy = data_len },
         });
         defer exe.deinit(ally);
@@ -866,7 +866,7 @@ test "zero" {
         defer ally.free(data);
         prng.random().bytes(data);
 
-        var exe = try simple.build(&.{
+        const exe = try simple.build(&.{
             .{ .zero = data_len },
         });
         defer exe.deinit(ally);
@@ -902,7 +902,7 @@ test "jump" {
 
         b.resolve(dest, .code);
 
-        var exe = try b.build(ally);
+        const exe = try b.build(ally);
         defer exe.deinit(ally);
 
         var state = try Env.State.init(ally, exe, 0);
@@ -934,7 +934,7 @@ test "jz" {
         _ = try b.define("zero", .exported, .code);
         try b.op(.halt);
 
-        var exe = try b.build(ally);
+        const exe = try b.build(ally);
         defer exe.deinit(ally);
 
         const loc_nonzero = exe.get("nonzero").?;
@@ -979,7 +979,7 @@ test "jnz" {
         _ = try b.define("nonzero", .exported, .code);
         try b.op(.halt);
 
-        var exe = try b.build(ally);
+        const exe = try b.build(ally);
         defer exe.deinit(ally);
 
         const loc_nonzero = exe.get("nonzero").?;
@@ -1024,7 +1024,7 @@ test "label" {
 
         b.resolve(dest, .code);
 
-        var exe = try b.build(ally);
+        const exe = try b.build(ally);
         defer exe.deinit(ally);
 
         var state = try Env.State.init(ally, exe, 0);
@@ -1036,8 +1036,56 @@ test "label" {
     }
 }
 
-// TODO test data
-// TODO test bss
+test "data" {
+    try simple.init();
+    defer simple.deinit();
+
+    var b = Builder.init(ally);
+    defer b.deinit();
+
+    const label = try b.label(.data);
+    try b.data("hello, world");
+    try b.op(.{ .data = label });
+
+    const exe = try b.build(ally);
+    defer exe.deinit(ally);
+
+    var state = try Env.State.init(ally, exe, 0);
+    defer state.deinit(ally);
+
+    try simple.run(&state);
+
+    const ptr = try simple.pop([*]u8);
+    try std.testing.expectEqualStrings("hello, world", ptr[0..12]);
+}
+
+test "bss" {
+    try simple.init();
+    defer simple.deinit();
+
+    var b = Builder.init(ally);
+    defer b.deinit();
+
+    const label = try b.bss(@sizeOf(u32));
+    try b.op(.{ .bss = label });
+    try b.op(.dup);
+    try b.constant(u32, 42);
+    try b.op(.{ .store = .{
+        .width = .half,
+        .offset = 0,
+    } });
+
+    const exe = try b.build(ally);
+    defer exe.deinit(ally);
+
+    var state = try Env.State.init(ally, exe, 0);
+    defer state.deinit(ally);
+
+    try simple.run(&state);
+
+    const ptr = try simple.pop(*const u32);
+    try std.testing.expectEqual(@as(u32, 42), ptr.*);
+}
 
 test "call" {
     try simple.init();
@@ -1054,7 +1102,7 @@ test "call" {
     try b.op(.halt);
     try b.op(.halt);
 
-    var exe = try b.build(ally);
+    const exe = try b.build(ally);
     defer exe.deinit(ally);
 
     var state = try Env.State.init(ally, exe, 0);
@@ -1091,7 +1139,7 @@ test "ret" {
             try b.op(.{ .ret = @intCast(n) });
             try b.op(.halt);
 
-            var exe = try b.build(ally);
+            const exe = try b.build(ally);
             defer exe.deinit(ally);
 
             const start_pc: u32 = std.math.maxInt(u32);
