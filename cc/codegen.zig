@@ -61,7 +61,7 @@ fn getIntSignedness(t: Type) std.builtin.Signedness {
 
 // lowering ====================================================================
 
-pub const Error = Allocator.Error || Builder.SymbolError ||  UnimplementedError;
+pub const Error = Allocator.Error || Builder.SymbolError || UnimplementedError;
 
 /// lower a global var
 fn lowerGlobalData(
