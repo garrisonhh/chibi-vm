@@ -367,3 +367,74 @@ pub const Op = union(Opcode) {
         }
     }
 };
+
+/// iterate over bytecode
+///
+/// *iterator assumes code is valid*
+pub fn iterate(code: []const u8) Iterator {
+    return .{ .code = code };
+}
+
+/// iterator output
+pub const EncodedOp = struct {
+    /// offset into code
+    offset: usize,
+    byteop: ByteOp,
+    extra: []const u8,
+
+    pub fn format(
+        self: EncodedOp,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        try writer.writeAll(@tagName(self.byteop.opcode));
+
+        const meta = self.byteop.opcode.meta();
+        if (meta.sized) {
+            try writer.print(" {s}", .{@tagName(self.byteop.width)});
+        }
+
+        switch (self.extra.len) {
+            0 => {},
+            inline 1, 2, 4, 8 => |size| {
+                const U = std.meta.Int(.unsigned, @as(u16, @intCast(size)) * 8);
+                const I = std.meta.Int(.signed, @as(u16, @intCast(size)) * 8);
+
+                const bytes: *const [size]u8  = @ptrCast(self.extra.ptr);
+                const u = std.mem.bytesAsValue(U, bytes).*;
+                const i = std.mem.bytesAsValue(I, bytes).*;
+
+                try writer.print(" {d}", .{u});
+                if (i < 0) {
+                    try writer.print(" (signed: {d})", .{i});
+                }
+            },
+            else => unreachable,
+        }
+    }
+};
+
+pub const Iterator = struct {
+    code: []const u8,
+    index: usize = 0,
+
+    pub fn next(iter: *Iterator) ?EncodedOp  {
+        if (iter.index == iter.code.len) return null;
+
+        const offset = iter.index;
+
+        const bo: ByteOp = @bitCast(iter.code[iter.index]);
+        iter.index += 1;
+
+        const extra_len = bo.extraBytes();
+        const extra = iter.code[iter.index .. iter.index + extra_len];
+        iter.index += extra_len;
+
+        return EncodedOp{
+            .offset = offset,
+            .byteop = bo,
+            .extra = extra,
+        };
+    }
+};

@@ -425,6 +425,15 @@ pub fn link(ally: Allocator, units: []const Unit) Allocator.Error!Unit {
     const unit = units[0];
     std.debug.assert(unit.imports.len == 0);
 
+    std.debug.print("[linked]\n", .{});
+
+    var iter = ops.iterate(unit.code);
+    while (iter.next()) |encoded| {
+        std.debug.print("{d: >4} | {}\n", .{encoded.offset, encoded});
+    }
+
+    std.debug.print("\n", .{});
+
     return Unit{
         .imports = &.{},
         .exports = try ally.dupe(Symbol, unit.exports),
