@@ -74,7 +74,7 @@ fn lowerGlobalData(
 
     // TODO respect static
     _ = try b.define(name, .exported, .data);
-    try b.data(bytes);
+    _ = try b.data(bytes);
 
     try globals.put(name, .data);
 }
@@ -335,10 +335,10 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
                 try lowerNode(b, ctx, meta.then);
                 try b.op(.{ .jump = end });
 
-                b.resolve(else_branch, .code);
+                b.resolve(else_branch);
                 try lowerNode(b, ctx, @"else");
 
-                b.resolve(end, .code);
+                b.resolve(end);
             } else {
                 const end = try b.backref();
 
@@ -349,7 +349,7 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
                 } });
 
                 try lowerNode(b, ctx, meta.then);
-                b.resolve(end, .code);
+                b.resolve(end);
             }
         },
         .@"for" => |meta| {
@@ -360,7 +360,7 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
                 try lowerNode(b, ctx, n);
             }
 
-            b.resolve(start, .code);
+            b.resolve(start);
 
             if (meta.cond) |cond| {
                 try lowerNode(b, ctx, cond);
@@ -377,10 +377,10 @@ fn lowerNode(b: *Builder, ctx: *const Context, node: *const Node) Error!void {
             }
 
             try b.op(.{ .jump = start });
-            b.resolve(end, .code);
+            b.resolve(end);
         },
         .do => |meta| {
-            const start = try b.label(.code);
+            const start = try b.label();
 
             try lowerNode(b, ctx, meta.body);
             try lowerNode(b, ctx, meta.cond);
