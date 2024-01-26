@@ -36,6 +36,13 @@ pub const Error = error{
     VmIntegerOverflow,
 };
 
+/// a native function callable by the vm
+///
+/// this function must follow the same rules as a typical vm function. internal
+/// errors should be handled by returning them by value into the vm.
+pub const NativeFn = fn(*Env) Error!void;
+
+/// encodes env state that only persists during execution of a unit
 pub const State = struct {
     /// current env memory
     ///
@@ -479,6 +486,11 @@ const monomorphic_subs = struct {
     fn call(env: *Env, state: *State) Error!void {
         const dest = try env.pop(u32);
         try env.call(state, dest);
+    }
+
+    fn native_call(env: *Env, _: *State) Error!void {
+        const native_fn = try env.pop(*const NativeFn);
+        try native_fn(env);
     }
 };
 

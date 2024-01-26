@@ -1164,3 +1164,34 @@ test "ret" {
         }
     }
 }
+
+fn nativeMulAdd(env: *Env) Env.Error!void {
+    const c = try env.pop(u64);
+    const b = try env.pop(u64);
+    const a = try env.pop(u64);
+    try env.push(u64, a * b + c);
+}
+
+test "native_call" {
+    try simple.init();
+    defer simple.deinit();
+
+    var b = Builder.init(ally);
+    defer b.deinit();
+
+    try b.constant(*const Env.NativeFn, &nativeMulAdd);
+    try b.op(.native_call);
+
+    const exe = try b.build(ally);
+    defer exe.deinit(ally);
+
+    var state = try Env.State.init(ally, exe, 0);
+    defer state.deinit(ally);
+
+    try simple.push(u64, 3);
+    try simple.push(u64, 4);
+    try simple.push(u64, 5);
+    try simple.run(&state);
+    try simple.expect(u64, 17);
+    try simple.expectStackSize(0);
+}

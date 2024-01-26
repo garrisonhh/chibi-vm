@@ -27,8 +27,8 @@ with an interface that is pleasant to hack on.
 - [x] well-defined call convention and stack mechanics
 - [x] elf-like segmented process memory mapping
 - [x] very good test coverage
+- [x] native function bindings
 - [ ] linking multiple translation units, allowing for parallelism
-- [ ] calls to system-v native functions
 
 ### non-goals
 

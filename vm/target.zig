@@ -425,6 +425,7 @@ pub fn link(ally: Allocator, units: []const Unit) Allocator.Error!Unit {
     const unit = units[0];
     std.debug.assert(unit.imports.len == 0);
 
+    // dump linked code TODO remove
     std.debug.print("[linked]\n", .{});
 
     var iter = ops.iterate(unit.code);

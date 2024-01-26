@@ -91,6 +91,8 @@ pub const Opcode = enum(u6) {
     jnz,
     /// pops u32 and calls it
     call,
+    /// pops native function pointer and calls it
+    native_call,
 
     pub const Meta = struct {
         /// popped values
@@ -154,7 +156,7 @@ pub const Opcode = enum(u6) {
 
             .jump => .{ .inputs = 0, .outputs = 0, .sized = false },
             .jz, .jnz => .{ .inputs = 1, .outputs = 0, .sized = true },
-            .call => .{ .inputs = 1, .outputs = 0, .sized = false },
+            .call, .native_call => .{ .inputs = 1, .outputs = 0, .sized = false },
         };
     }
 };
@@ -230,6 +232,7 @@ pub const ByteOp = packed struct(u8) {
             .sign_extend,
             .sign_narrow,
             .call,
+            .native_call,
             => 0,
 
             .ret => 1,
@@ -318,6 +321,7 @@ pub const Op = union(Opcode) {
     jz: CondJmp,
     jnz: CondJmp,
     call,
+    native_call,
 
     pub fn format(
         op: Op,
