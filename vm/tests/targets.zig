@@ -85,3 +85,63 @@ test "basic linking" {
 
     try std.testing.expectEqual(@as(i32, 56), res);
 }
+
+test "massive amount of units" {
+    const count = 32 * 1024;
+
+    var arena = std.heap.ArenaAllocator.init(ally);
+    defer arena.deinit();
+    const arena_ally = arena.allocator();
+
+    var prng = std.rand.DefaultPrng.init(0);
+
+    var values = std.StringHashMap(u64).init(ally);
+    defer values.deinit();
+
+    var units = std.ArrayList(vm.Unit).init(ally);
+    defer {
+        for (units.items) |unit| unit.deinit(ally);
+        units.deinit();
+    }
+
+    for (0..count) |i| {
+        var b = vm.Builder.init(ally);
+        defer b.deinit();
+
+        const name = try std.fmt.allocPrint(arena_ally, "f{d}", .{i});
+        const value = prng.random().uintAtMost(u64, std.math.maxInt(u64));
+
+        try values.put(name, value);
+
+        try b.define(name, .exported, .code);
+        try b.constant(u64, value);
+        try b.op(.{ .ret = 0 });
+
+        const unit = try b.build(ally);
+        try units.append(unit);
+    }
+
+    const mod = try vm.link(ally, units.items);
+    defer mod.deinit(ally);
+
+    var env = try vm.Env.init(ally, .{});
+    defer env.deinit(ally);
+
+    var state = try vm.Env.State.init(ally, mod, @intCast(mod.code.len));
+    defer state.deinit(ally);
+
+    var entries = values.iterator();
+    while (entries.next()) |entry| {
+        const name = entry.key_ptr.*;
+        const expected = entry.value_ptr.*;
+
+        const loc = mod.get(name).?;
+        try std.testing.expectEqual(vm.Segment.code, loc.segment);
+
+        try env.call(&state, loc.offset);
+        try env.run(&state);
+        const actual = try env.pop(u64);
+
+        try std.testing.expectEqual(expected, actual);
+    }
+}
