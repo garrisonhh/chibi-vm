@@ -73,7 +73,7 @@ fn lowerGlobalData(
     const bytes = meta.data orelse return;
 
     // TODO respect static
-    _ = try b.define(name, .exported, .data);
+    try b.define(name, .exported, .data);
     _ = try b.data(bytes);
 
     try globals.put(name, .data);
@@ -505,7 +505,7 @@ fn lowerFunction(
 
     // write code
     // TODO respect static functions with ns vvv
-    _ = try b.define(name, .exported, .code);
+    try b.define(name, .exported, .code);
 
     try b.op(.{ .enter = stack_size });
 

@@ -768,8 +768,6 @@ pub const FrontendError = Allocator.Error || error{
 pub fn parse(ally: Allocator, source: Source) FrontendError![]const Object {
     const file = try loadSource(source);
 
-    std.debug.print("COMPILING {s}\n", .{source.name});
-
     // tokenize
     const raw_tokens = chibi.tokenize(file) orelse {
         // no tokens, TODO check for errors
@@ -789,11 +787,6 @@ pub fn parse(ally: Allocator, source: Source) FrontendError![]const Object {
     while (obj_iter.next()) |chibi_obj| {
         const object = try Object.fromChibi(ally, chibi_obj);
         try objects.append(ally, object);
-
-        // TODO make this a cli flag?
-        if (in_debug) {
-            object.dump();
-        }
     }
 
     return try objects.toOwnedSlice(ally);

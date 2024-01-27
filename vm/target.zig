@@ -290,23 +290,11 @@ pub const Builder = struct {
         SymbolAlreadyDefined,
     };
 
-    /// define a future named export
+    /// resolve a symbol at a current location.
     ///
-    /// *name must outlive builder + unit*
-    pub fn defineBackref(
-        self: *Self,
-        name: []const u8,
-        vis: Visibility,
-    ) SymbolError!Label {
-        if (self.exports.contains(name)) {
-            return SymbolError.SymbolAlreadyDefined;
-        }
-
-        try self.exports.put(self.ally, name, vis);
-        return try self.symbol(name);
-    }
-
-    /// define and resolve a named export at a current location
+    /// instead of using backrefs for this, you can just use symbol() which
+    /// provides a unique label for each symbol for the entire module. you can
+    /// also use symbol to retrieve a name if you need it.
     ///
     /// *name must outlive builder + unit*
     pub fn define(
@@ -314,10 +302,14 @@ pub const Builder = struct {
         name: []const u8,
         vis: Visibility,
         segment: Segment,
-    ) SymbolError!Label {
-        const lbl = try self.defineBackref(name, vis);
+    ) SymbolError!void {
+        if (self.exports.contains(name)) {
+            return SymbolError.SymbolAlreadyDefined;
+        }
+
+        const lbl = try self.symbol(name);
+        try self.exports.put(self.ally, name, vis);
         self.resolveInSegment(lbl, segment);
-        return lbl;
     }
 
     /// get or create a label for a name
@@ -509,8 +501,9 @@ pub const LinkError = Allocator.Error || error {
     SymbolNotFound,
 };
 
-/// offset a location
-fn absoluteLocation(
+/// get the absolute location of a relative location using its segment and
+/// the current offsets
+fn absLoc(
     code_offset: u32,
     data_offset: u32,
     bss_offset: u32,
@@ -548,42 +541,6 @@ fn stitch(
 
 /// link multiple units into a single unit
 pub fn link(ally: Allocator, units: []const Unit) LinkError!Module {
-    // dump unit data TODO remove
-    for (units, 0..) |unit, i| {
-        std.debug.print("[UNIT {}]\n", .{i});
-
-        std.debug.print("imports:\n", .{});
-        for (unit.imports) |import| {
-            std.debug.print("  `{s}` ->", .{import.name});
-            for (import.refs) |loc| std.debug.print(" {}", .{loc});
-            std.debug.print("\n", .{});
-        }
-
-        std.debug.print("exports:\n", .{});
-        for (unit.exports) |sym| {
-            std.debug.print("  {s} `{s}` {}\n", .{@tagName(sym.vis), sym.name, sym.loc});
-        }
-
-        std.debug.print("relocations:\n", .{});
-        for (unit.relocations) |relocation| {
-            std.debug.print("  {} ->", .{relocation.loc});
-            for (relocation.refs) |loc| std.debug.print(" {}", .{loc});
-            std.debug.print("\n", .{});
-        }
-
-        std.debug.print("code:\n", .{});
-
-        var iter = ops.iterate(unit.code);
-        while (iter.next()) |encoded| {
-            std.debug.print("  {d: >4} | {}\n", .{encoded.offset, encoded});
-        }
-
-        std.debug.print("data: {d}\n", .{unit.data});
-        std.debug.print("bss: {d}\n", .{unit.bss});
-
-        std.debug.print("\n", .{});
-    }
-
     // collect public symbols and determine their absolute locations
     var symbols = std.StringHashMap(Symbol).init(ally);
     defer symbols.deinit();
@@ -608,8 +565,6 @@ pub fn link(ally: Allocator, units: []const Unit) LinkError!Module {
                 .segment = x.loc.segment,
                 .offset = segment_offset + x.loc.offset,
             };
-
-            std.debug.print("LINKING PUBLIC `{s}` -> {}\n", .{x.name, abs_loc});
 
             res.value_ptr.* = Symbol{
                 .name = x.name,
@@ -641,8 +596,8 @@ pub fn link(ally: Allocator, units: []const Unit) LinkError!Module {
 
         for (unit.relocations) |reloc| {
             for (reloc.refs) |ref| {
-                const src = absoluteLocation(code_offset, data_offset, bss_offset, reloc.loc);
-                const dst = absoluteLocation(code_offset, data_offset, bss_offset, ref);
+                const src = absLoc(code_offset, data_offset, bss_offset, reloc.loc);
+                const dst = absLoc(code_offset, data_offset, bss_offset, ref);
                 stitch(src, dst, code.items, data.items);
             }
         }
@@ -654,7 +609,7 @@ pub fn link(ally: Allocator, units: []const Unit) LinkError!Module {
             const loc = meta.loc;
 
             for (import.refs) |ref| {
-                const dst = absoluteLocation(code_offset, data_offset, bss_offset, ref);
+                const dst = absLoc(code_offset, data_offset, bss_offset, ref);
                 stitch(loc, dst, code.items, data.items);
             }
         }
@@ -674,22 +629,10 @@ pub fn link(ally: Allocator, units: []const Unit) LinkError!Module {
         }
     }
 
-    const mod = Module{
+    return Module{
         .exports = try exports.toOwnedSlice(),
         .code = try code.toOwnedSlice(),
         .data = try data.toOwnedSlice(),
         .bss = bss,
     };
-
-    // dump linked code TODO remove
-    std.debug.print("[linked]\n", .{});
-
-    var iter = ops.iterate(mod.code);
-    while (iter.next()) |encoded| {
-        std.debug.print("{d: >4} | {}\n", .{encoded.offset, encoded});
-    }
-
-    std.debug.print("\n", .{});
-
-    return mod;
 }

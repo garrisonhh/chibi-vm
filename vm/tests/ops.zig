@@ -41,7 +41,7 @@ const simple = struct {
         var builder = Builder.init(ally);
         defer builder.deinit();
 
-        _ = try builder.define(func_name, .exported, .code);
+        try builder.define(func_name, .exported, .code);
         for (code) |o| {
             try builder.op(o);
         }
@@ -930,11 +930,11 @@ test "jz" {
         const dest = try b.backref();
 
         try b.op(.{ .jz = .{ .width = width, .dest = dest } });
-        _ = try b.define("nonzero", .exported, .code);
+        try b.define("nonzero", .exported, .code);
         try b.op(.halt);
 
         b.resolve(dest);
-        _ = try b.define("zero", .exported, .code);
+        try b.define("zero", .exported, .code);
         try b.op(.halt);
 
         const unit = try b.build(ally);
@@ -978,11 +978,11 @@ test "jnz" {
         const dest = try b.backref();
 
         try b.op(.{ .jnz = .{ .width = width, .dest = dest } });
-        _ = try b.define("zero", .exported, .code);
+        try b.define("zero", .exported, .code);
         try b.op(.halt);
 
         b.resolve(dest);
-        _ = try b.define("nonzero", .exported, .code);
+        try b.define("nonzero", .exported, .code);
         try b.op(.halt);
 
         const unit = try b.build(ally);

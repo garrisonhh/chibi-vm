@@ -57,7 +57,7 @@ test "basic linking" {
 
     const add_label = try b.symbol("add");
 
-    _ = try b.define("call_add", .exported, .code);
+    try b.define("call_add", .exported, .code);
     try b.param(0);
     try b.op(.{ .load = .{
         .width = .half,
