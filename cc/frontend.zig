@@ -770,7 +770,7 @@ pub fn parse(ally: Allocator, source: Source) FrontendError![]const Object {
 
     // tokenize
     const raw_tokens = chibi.tokenize(file) orelse {
-        // no tokens, TODO check for errors
+        // no tokens
         std.debug.print("failed to tokenize {s}\n", .{source.name});
         return FrontendError.TokenizeError;
     };

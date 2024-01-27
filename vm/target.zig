@@ -51,6 +51,7 @@ pub const Unit = struct {
     };
 
     const Relocation = struct {
+        /// the relative location of something which will need to be linked
         loc: Location,
         /// write the u32 offset of the label to these locations to link
         refs: []const Location,
@@ -59,7 +60,6 @@ pub const Unit = struct {
     /// symbols which must be resolved before execution
     imports: []const Import,
     /// symbols exported by this unit for linking to other units
-    /// TODO use some kind of immutable hashmap for this
     exports: []const Symbol,
     /// list of locations that need to be linked internally once segment offsets
     /// are known
@@ -88,8 +88,19 @@ pub const Module = struct {
     const Export = struct {
         name: []const u8,
         loc: Location,
+
+        /// for sorting exports with std.sort functions
+        fn lessThan(_: void, a: Export, b: Export) bool {
+            return std.mem.order(u8, a.name, b.name).compare(.lt);
+        }
+
+        /// for accessing exports with std.sort.binarySearch
+        fn binaryCompare(_: void, key: []const u8, it: Export) std.math.Order {
+            return std.mem.order(u8, key, it.name);
+        }
     };
 
+    /// binary-search-able list of exports
     exports: []const Export,
     code: []const u8,
     data: []const u8,
@@ -103,11 +114,14 @@ pub const Module = struct {
 
     /// get the location of an export
     pub fn get(mod: Module, name: []const u8) ?Location {
-        return for (mod.exports) |x| {
-            if (std.mem.eql(u8, x.name, name)) {
-                break x.loc;
-            }
-        } else null;
+        const index = std.sort.binarySearch(
+            Export,
+            name,
+            mod.exports,
+            {},
+            Export.binaryCompare,
+        ) orelse return null;
+        return mod.exports[index].loc;
     }
 };
 
@@ -374,7 +388,6 @@ pub const Builder = struct {
     }
 
     /// add data to globally loaded data
-    /// TODO make this return a data label
     pub fn data(self: *Self, bytes: []const u8) Allocator.Error!Label {
         const lbl = self.here(.data);
 
@@ -615,7 +628,7 @@ pub fn link(ally: Allocator, units: []const Unit) LinkError!Module {
         }
     }
 
-    // collect exported symbols
+    // collect exported symbols in a binary-search-able slice
     var exports = std.ArrayList(Module.Export).init(ally);
     defer exports.deinit();
 
@@ -628,6 +641,8 @@ pub fn link(ally: Allocator, units: []const Unit) LinkError!Module {
             });
         }
     }
+
+    std.sort.pdq(Module.Export, exports.items, {}, Module.Export.lessThan);
 
     return Module{
         .exports = try exports.toOwnedSlice(),

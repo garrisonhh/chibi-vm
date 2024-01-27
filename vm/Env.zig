@@ -559,7 +559,6 @@ fn generic_subs(comptime W: Width) type {
             try env.push(U, res);
         }
 
-        // TODO is this too complicated to have as an instruction?
         fn modi(env: *Env, _: *State) Error!void {
             const b = try env.pop(I);
             const a = try env.pop(I);
