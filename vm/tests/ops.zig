@@ -61,21 +61,11 @@ const simple = struct {
     }
 
     fn runModule(mod: Module) !void {
-        const loc = mod.get(func_name).?;
-        std.debug.assert(loc.segment == .code);
-
-        var state = try Env.State.init(ally, mod, loc.offset);
-        defer state.deinit(ally);
-
-        try env.run(&state);
+        try env.loadExec(ally, mod, func_name);
     }
 
     fn run(state: *Env.State) !void {
         try env.run(state);
-    }
-
-    fn reset() void {
-        env.reset();
     }
 
     fn push(comptime T: type, value: T) !void {
@@ -398,6 +388,9 @@ fn applyVerifier(
     var mod = try simple.build(&.{op});
     defer mod.deinit(ally);
 
+    var state = try Env.load(ally, mod);
+    defer state.deinit(ally);
+
     // run the tests
     const Returns = CaseReturns(F);
     const Result = VerifierResult(Returns);
@@ -407,7 +400,8 @@ fn applyVerifier(
         }
 
         const actual: Result = res: {
-            simple.runModule(mod) catch |e| {
+            state.pc = 0;
+            simple.env.run(&state) catch |e| {
                 break :res .{ .err = e };
             };
 
@@ -610,12 +604,16 @@ test "enter" {
         });
         defer mod.deinit(ally);
 
-        try simple.runModule(mod);
+        var state = try Env.load(ally, mod);
+        defer state.deinit(ally);
+        state.pc = 0;
+
+        try simple.env.run(&state);
 
         const expected = std.mem.alignForward(usize, reserve, 8);
         try simple.expectStackSize(expected);
 
-        simple.reset();
+        simple.env.reset();
     }
 }
 
@@ -626,8 +624,12 @@ test "dup" {
     const mod = try simple.build(&.{.dup});
     defer mod.deinit(ally);
 
+    var state = try Env.load(ally, mod);
+    defer state.deinit(ally);
+    state.pc = 0;
+
     try simple.push(u64, 42);
-    try simple.runModule(mod);
+    try simple.env.run(&state);
     try simple.expectStackSize(16);
     try simple.expect(u64, 42);
     try simple.expect(u64, 42);
@@ -641,9 +643,13 @@ test "drop" {
     const mod = try simple.build(&.{.drop});
     defer mod.deinit(ally);
 
+    var state = try Env.load(ally, mod);
+    defer state.deinit(ally);
+    state.pc = 0;
+
     try simple.push(u64, 0);
     try simple.expectStackSize(8);
-    try simple.runModule(mod);
+    try simple.env.run(&state);
     try simple.expectStackSize(0);
 }
 
@@ -671,7 +677,11 @@ test "constant" {
             const mod = try simple.build(&.{op});
             defer mod.deinit(ally);
 
-            try simple.runModule(mod);
+            var state = try Env.load(ally, mod);
+            defer state.deinit(ally);
+            state.pc = 0;
+
+            try simple.env.run(&state);
             try simple.expectStackSize(8);
             try simple.expect(Bytes, bytes);
             try simple.expectStackSize(0);
@@ -695,7 +705,11 @@ test "local" {
         });
         defer mod.deinit(ally);
 
-        try simple.runModule(mod);
+        var state = try Env.load(ally, mod);
+        defer state.deinit(ally);
+        state.pc = 0;
+
+        try simple.env.run(&state);
 
         const base = @intFromPtr(simple.env.stack.base);
         const expected = if (offset > 0) pos: {
@@ -748,8 +762,12 @@ test "load" {
             const mod = try simple.build(&.{op});
             defer mod.deinit(ally);
 
+            var state = try Env.load(ally, mod);
+            defer state.deinit(ally);
+            state.pc = 0;
+
             try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(data)));
-            try simple.runModule(mod);
+            try simple.env.run(&state);
             try simple.expectStackSize(8);
             try simple.expect(Bytes, expected.*);
             try simple.expectStackSize(0);
@@ -796,9 +814,13 @@ test "store" {
             const mod = try simple.build(&.{op});
             defer mod.deinit(ally);
 
+            var state = try Env.load(ally, mod);
+            defer state.deinit(ally);
+            state.pc = 0;
+
             try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(data)));
             try simple.push(Bytes, input);
-            try simple.runModule(mod);
+            try simple.env.run(&state);
             try simple.expectStackSize(0);
 
             const actual: *const Bytes = @ptrCast(data[byte_offset .. byte_offset + nbytes]);
@@ -835,10 +857,14 @@ test "copy" {
         });
         defer mod.deinit(ally);
 
+        var state = try Env.load(ally, mod);
+        defer state.deinit(ally);
+        state.pc = 0;
+
         const data_ptr: *anyopaque = @ptrCast(data);
         try simple.push(*anyopaque, data_ptr);
         try simple.push(*anyopaque, @as(*anyopaque, @ptrCast(dest)));
-        try simple.runModule(mod);
+        try simple.env.run(&state);
         try simple.expect(*anyopaque, data_ptr);
         try simple.expectStackSize(0);
 
@@ -871,9 +897,13 @@ test "zero" {
         });
         defer mod.deinit(ally);
 
+        var state = try Env.load(ally, mod);
+        defer state.deinit(ally);
+        state.pc = 0;
+
         const data_ptr: *anyopaque = @ptrCast(data);
         try simple.push(*anyopaque, data_ptr);
-        try simple.runModule(mod);
+        try simple.env.run(&state);
         try simple.expect(*anyopaque, data_ptr);
         try simple.expectStackSize(0);
 
@@ -908,10 +938,11 @@ test "jump" {
         const mod = try vm.link(ally, &.{unit});
         defer mod.deinit(ally);
 
-        var state = try Env.State.init(ally, mod, 0);
+        var state = try Env.load(ally, mod);
         defer state.deinit(ally);
+        state.pc = 0;
 
-        try simple.run(&state);
+        try simple.env.run(&state);
 
         try std.testing.expectEqual(state.code_len, state.pc);
     }
@@ -943,21 +974,22 @@ test "jz" {
         const mod = try vm.link(ally, &.{unit});
         defer mod.deinit(ally);
 
-        const loc_nonzero = mod.get("nonzero").?;
-        const loc_zero = mod.get("zero").?;
-
         for (0..2) |n| {
             try simple.push(I, @as(I, @intCast(n)));
 
-            var state = try Env.State.init(ally, mod, 0);
+            var state = try Env.load(ally, mod);
             defer state.deinit(ally);
+            state.pc = 0;
 
-            const res = simple.run(&state);
+            const offset_nonzero = state.symbol("nonzero").?;
+            const offset_zero = state.symbol("zero").?;
+
+            const res = simple.env.run(&state);
             try std.testing.expectError(Env.Error.VmHalt, res);
 
             const expected: usize = switch (n) {
-                0 => loc_zero.offset + 1,
-                1 => loc_nonzero.offset + 1,
+                0 => offset_zero + 1,
+                1 => offset_nonzero + 1,
                 else => unreachable,
             };
             try std.testing.expectEqual(expected, state.pc);
@@ -991,21 +1023,22 @@ test "jnz" {
         const mod = try vm.link(ally, &.{unit});
         defer mod.deinit(ally);
 
-        const loc_nonzero = mod.get("nonzero").?;
-        const loc_zero = mod.get("zero").?;
-
         for (0..2) |n| {
             try simple.push(I, @as(I, @intCast(n)));
 
-            var state = try Env.State.init(ally, mod, 0);
+            var state = try Env.load(ally, mod);
             defer state.deinit(ally);
+            state.pc = 0;
 
-            const res = simple.run(&state);
+            const offset_nonzero = state.symbol("nonzero").?;
+            const offset_zero = state.symbol("zero").?;
+
+            const res = simple.env.run(&state);
             try std.testing.expectError(Env.Error.VmHalt, res);
 
             const expected: usize = switch (n) {
-                0 => loc_zero.offset + 1,
-                1 => loc_nonzero.offset + 1,
+                0 => offset_zero + 1,
+                1 => offset_nonzero + 1,
                 else => unreachable,
             };
             try std.testing.expectEqual(expected, state.pc);
@@ -1024,6 +1057,7 @@ test "label" {
         defer b.deinit();
 
         const dest = try b.backref();
+
         try b.op(.{ .label = dest });
         try b.op(.halt);
 
@@ -1039,10 +1073,11 @@ test "label" {
         const mod = try vm.link(ally, &.{unit});
         defer mod.deinit(ally);
 
-        var state = try Env.State.init(ally, mod, 0);
+        var state = try Env.load(ally, mod);
         defer state.deinit(ally);
+        state.pc = 0;
 
-        const res = simple.run(&state);
+        const res = simple.env.run(&state);
         try std.testing.expectError(Env.Error.VmHalt, res);
         try simple.expect(u32, 6 + @as(u32, @intCast(n)));
     }
@@ -1064,8 +1099,9 @@ test "data" {
     const mod = try vm.link(ally, &.{unit});
     defer mod.deinit(ally);
 
-    var state = try Env.State.init(ally, mod, 0);
+    var state = try Env.load(ally, mod);
     defer state.deinit(ally);
+    state.pc = 0;
 
     try simple.run(&state);
 
@@ -1095,8 +1131,9 @@ test "bss" {
     const mod = try vm.link(ally, &.{unit});
     defer mod.deinit(ally);
 
-    var state = try Env.State.init(ally, mod, 0);
+    var state = try Env.load(ally, mod);
     defer state.deinit(ally);
+    state.pc = 0;
 
     try simple.run(&state);
 
@@ -1112,6 +1149,7 @@ test "call" {
     defer b.deinit();
 
     const dest = try b.backref();
+    try b.define(simple.func_name, .exported, .code);
     try b.op(.{ .label = dest });
     try b.op(.call);
 
@@ -1125,19 +1163,21 @@ test "call" {
     const mod = try vm.link(ally, &.{unit});
     defer mod.deinit(ally);
 
-    var state = try Env.State.init(ally, mod, 0);
+    var state = try Env.load(ally, mod);
     defer state.deinit(ally);
 
-    const res = simple.run(&state);
+    const res = simple.env.exec(&state, simple.func_name);
     try std.testing.expectError(Env.Error.VmHalt, res);
     try std.testing.expectEqual(state.code_len - 1, state.pc);
 
-    const expected = Env.Frame{
-        .base = simple.env.stack.mem.ptr,
+    try simple.expect(Env.Frame, Env.Frame{
+        .base = @ptrFromInt(@intFromPtr(simple.env.stack.mem.ptr) + Env.Frame.aligned_size),
         .pc = 6,
-    };
-    const frame = try simple.pop(Env.Frame);
-    try std.testing.expectEqual(expected, frame);
+    });
+    try simple.expect(Env.Frame, Env.Frame{
+        .base = simple.env.stack.mem.ptr,
+        .pc = state.code_len,
+    });
 }
 
 test "ret" {
@@ -1155,9 +1195,9 @@ test "ret" {
             var b = Builder.init(ally);
             defer b.deinit();
 
+            try b.define(simple.func_name, .exported, .code);
             try b.constant(I, 42);
             try b.op(.{ .ret = @intCast(n) });
-            try b.op(.halt);
 
             const unit = try b.build(ally);
             defer unit.deinit(ally);
@@ -1165,7 +1205,10 @@ test "ret" {
             const mod = try vm.link(ally, &.{unit});
             defer mod.deinit(ally);
 
-            const start_pc: u32 = std.math.maxInt(u32);
+            var state = try Env.load(ally, mod);
+            defer state.deinit(ally);
+
+            const start_pc = state.pc;
             const start_base = simple.env.stack.base;
             const start_top = simple.env.stack.top;
 
@@ -1175,11 +1218,7 @@ test "ret" {
                 try simple.push(u64, val);
             }
 
-            var state = try Env.State.init(ally, mod, start_pc);
-            defer state.deinit(ally);
-
-            try simple.env.call(&state, 0);
-            try simple.run(&state);
+            try simple.env.exec(&state, simple.func_name);
 
             try simple.expect(u8, 42);
             try std.testing.expectEqual(start_pc, state.pc);
@@ -1212,8 +1251,9 @@ test "native_call" {
     const mod = try vm.link(ally, &.{unit});
     defer mod.deinit(ally);
 
-    var state = try Env.State.init(ally, mod, 0);
+    var state = try Env.load(ally, mod);
     defer state.deinit(ally);
+    state.pc = 0;
 
     try simple.push(u64, 3);
     try simple.push(u64, 4);

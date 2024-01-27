@@ -39,7 +39,7 @@ test "singular translation unit" {
 
     try env.push(i32, 22);
     try env.push(i32, 34);
-    try env.exec(ally, mod, "add");
+    try env.loadExec(ally, mod, "add");
     const res = try env.pop(i32);
 
     try std.testing.expectEqual(@as(i32, 56), res);
@@ -80,7 +80,7 @@ test "basic linking" {
 
     try env.push(i32, 22);
     try env.push(i32, 34);
-    try env.exec(ally, mod, "call_add");
+    try env.loadExec(ally, mod, "call_add");
     const res = try env.pop(i32);
 
     try std.testing.expectEqual(@as(i32, 56), res);
@@ -127,7 +127,7 @@ test "massive amount of units" {
     var env = try vm.Env.init(ally, .{});
     defer env.deinit(ally);
 
-    var state = try vm.Env.State.init(ally, mod, @intCast(mod.code.len));
+    var state = try vm.Env.load(ally, mod);
     defer state.deinit(ally);
 
     var entries = values.iterator();
@@ -135,13 +135,9 @@ test "massive amount of units" {
         const name = entry.key_ptr.*;
         const expected = entry.value_ptr.*;
 
-        const loc = mod.get(name).?;
-        try std.testing.expectEqual(vm.Segment.code, loc.segment);
+        try env.exec(&state, name);
 
-        try env.call(&state, loc.offset);
-        try env.run(&state);
         const actual = try env.pop(u64);
-
         try std.testing.expectEqual(expected, actual);
     }
 }

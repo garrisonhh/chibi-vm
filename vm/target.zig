@@ -88,16 +88,6 @@ pub const Module = struct {
     const Export = struct {
         name: []const u8,
         loc: Location,
-
-        /// for sorting exports with std.sort functions
-        fn lessThan(_: void, a: Export, b: Export) bool {
-            return std.mem.order(u8, a.name, b.name).compare(.lt);
-        }
-
-        /// for accessing exports with std.sort.binarySearch
-        fn binaryCompare(_: void, key: []const u8, it: Export) std.math.Order {
-            return std.mem.order(u8, key, it.name);
-        }
     };
 
     /// binary-search-able list of exports
@@ -110,18 +100,6 @@ pub const Module = struct {
         ally.free(mod.exports);
         ally.free(mod.code);
         ally.free(mod.data);
-    }
-
-    /// get the location of an export
-    pub fn get(mod: Module, name: []const u8) ?Location {
-        const index = std.sort.binarySearch(
-            Export,
-            name,
-            mod.exports,
-            {},
-            Export.binaryCompare,
-        ) orelse return null;
-        return mod.exports[index].loc;
     }
 };
 
@@ -641,8 +619,6 @@ pub fn link(ally: Allocator, units: []const Unit) LinkError!Module {
             });
         }
     }
-
-    std.sort.pdq(Module.Export, exports.items, {}, Module.Export.lessThan);
 
     return Module{
         .exports = try exports.toOwnedSlice(),

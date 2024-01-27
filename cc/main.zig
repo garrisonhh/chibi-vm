@@ -72,8 +72,8 @@ fn run(ally: Allocator, source_paths: []const [:0]const u8) !void {
     try env.push(i32, 0);
     try env.push(?[*]const [*:0]const u8, null);
 
-    env.exec(ally, exe, "main") catch |e| switch (e) {
-        vm.Env.ExecError.NoSuchFunction => {
+    env.loadExec(ally, exe, "main") catch |e| switch (e) {
+        vm.Env.ExecError.SymbolNotFound => {
             try stderr.print("error: no main function found\n", .{});
             std.process.exit(1);
         },

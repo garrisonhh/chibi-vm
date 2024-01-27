@@ -44,6 +44,8 @@ pub const NativeFn = fn(*Env) Error!void;
 
 /// encodes env state that only persists during execution of module code
 pub const State = struct {
+    const Symbols = std.StringHashMapUnmanaged(u32);
+
     /// current env memory
     ///
     /// *code is loaded to offset 0*
@@ -57,11 +59,16 @@ pub const State = struct {
     /// bss segment offset
     bss: u32,
 
-    pub fn init(
+    /// maps symbols to their absolute offsets for execution
+    symbols: Symbols = .{},
+
+    /// allocates loaded memory and loads offsets
+    fn init(
         ally: Allocator,
         mod: Module,
         initial_pc: u32,
     ) Allocator.Error!State {
+        // load module into memory
         const code_len: u32 = @intCast(mod.code.len);
         const data_len: u32 = @intCast(mod.data.len);
 
@@ -73,17 +80,39 @@ pub const State = struct {
         @memcpy(memory[0..code_len], mod.code);
         @memcpy(memory[data_offset .. data_offset + mod.data.len], mod.data);
 
+        // construct symbol map
+        var symbols = Symbols{};
+        errdefer symbols.deinit(ally);
+
+        for (mod.exports) |x| {
+            const segment_offset = switch (x.loc.segment) {
+                .code => 0,
+                .data => data_offset,
+                .bss => bss_offset,
+            };
+            const abs_offset = segment_offset + x.loc.offset;
+
+            try symbols.put(ally, x.name, abs_offset);
+        }
+
         return State{
             .memory = memory,
             .pc = initial_pc,
             .code_len = code_len,
             .data = data_offset,
             .bss = bss_offset,
+            .symbols = symbols,
         };
     }
 
-    pub fn deinit(state: State, ally: Allocator) void {
+    pub fn deinit(state: *State, ally: Allocator) void {
         ally.free(state.memory);
+        state.symbols.deinit(ally);
+    }
+
+    /// find the location of a symbol
+    pub fn symbol(state: State, name: []const u8) ?u32 {
+        return state.symbols.get(name);
     }
 
     fn stackSlice(state: State) []align(8) u8 {
@@ -230,7 +259,7 @@ pub fn pop(env: *Env, comptime T: type) Error!T {
 }
 
 /// does the necessary stack and state twiddling for calling a function
-pub fn call(env: *Env, state: *State, dest: u32) Error!void {
+fn call(env: *Env, state: *State, dest: u32) Error!void {
     try env.push(Frame, Frame{
         .base = env.stack.base,
         .pc = state.pc,
@@ -239,62 +268,17 @@ pub fn call(env: *Env, state: *State, dest: u32) Error!void {
     state.pc = dest;
 }
 
-// execution ===================================================================
+// loading and execution =======================================================
 
-/// writes the next op to stderr for debugging
-fn dumpNext(env: *const Env, state: State) void {
-    const code = state.memory[state.pc..];
-    const byteop: ByteOp = @bitCast(code[0]);
-    const extra = code[1 .. 1 + byteop.extraBytes()];
+pub const ExecError = Allocator.Error || Error || error {
+    SymbolNotFound,
+};
 
-    std.debug.print(
-        "{d:>6} | {d:>6} | {s}",
-        .{ state.pc, env.stack.used(), @tagName(byteop.opcode) },
-    );
-    if (byteop.opcode.meta().sized) {
-        std.debug.print(" {s}", .{@tagName(byteop.width)});
-    }
-
-    if (extra.len > 0) {
-        switch (extra.len) {
-            0 => {},
-            inline 1, 2, 4, 8 => |sz| {
-                const bytes: *const [sz]u8 = @ptrCast(extra.ptr);
-
-                switch (byteop.opcode) {
-                    .local => {
-                        const I = std.meta.Int(.signed, 8 * sz);
-                        const n = std.mem.bytesAsValue(I, bytes).*;
-                        std.debug.print(" {d}", .{n});
-                    },
-                    else => {
-                        const U = std.meta.Int(.unsigned, 8 * sz);
-                        const n = std.mem.bytesAsValue(U, bytes).*;
-                        std.debug.print(" {d}", .{n});
-                    },
-                }
-            },
-            else => unreachable,
-        }
-    }
-
-    std.debug.print("\n", .{});
-}
-
-/// dumps stack to stderr for debugging
-fn dumpStack(env: *const Env) void {
-    const start: [*]const u64 = @ptrCast(env.stack.mem.ptr);
-    const base = (@intFromPtr(env.stack.base) - @intFromPtr(start)) / 8;
-    const top = (@intFromPtr(env.stack.top) - @intFromPtr(start)) / 8;
-
-    std.debug.print("[stack]\n", .{});
-    for (0..top) |i| {
-        if (i == base) {
-            std.debug.print("<base>\n", .{});
-        }
-        std.debug.print("{} | {}\n", .{ i, start[i] });
-    }
-    std.debug.print("\n", .{});
+/// load a module for execution
+///
+/// *state is owned by callee and must be deinitialized to not leak*
+pub fn load(ally: Allocator, mod: Module) Allocator.Error!State {
+    return try State.init(ally, mod, @intCast(mod.code.len));
 }
 
 /// execute ops until complete with state provided
@@ -307,34 +291,28 @@ pub fn run(env: *Env, state: *State) Error!void {
     }
 }
 
-pub const ExecError = Allocator.Error || Error || error{
-    NoSuchFunction,
-    NotAFunction,
-};
+/// call an exported function from a loaded module
+pub fn exec(env: *Env, state: *State, name: []const u8) ExecError!void {
+    const offset = state.symbol(name) orelse {
+        return ExecError.SymbolNotFound;
+    };
 
-/// execute a function exported from a module
-///
-/// *allocator is used to allocate state memory*
-pub fn exec(
+    try env.call(state, offset);
+    try env.run(state);
+}
+
+/// load a module, execute a single function, and unload (this is a pretty
+/// common use case for the vm)
+pub fn loadExec(
     env: *Env,
     ally: Allocator,
     mod: Module,
     name: []const u8,
 ) ExecError!void {
-    const loc = mod.get(name) orelse {
-        return ExecError.NoSuchFunction;
-    };
-    if (loc.segment != .code) {
-        return ExecError.NotAFunction;
-    }
-
-    // add call frame from the end of the code so that execution stops cleanly
-    // when returning from the exported function
-    var state = try State.init(ally, mod, @intCast(mod.code.len));
+    var state = try load(ally, mod);
     defer state.deinit(ally);
-    try env.call(&state, loc.offset);
 
-    try env.run(&state);
+    try env.exec(&state, name);
 }
 
 // opcode functions ============================================================
