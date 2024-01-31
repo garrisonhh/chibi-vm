@@ -349,7 +349,7 @@ const byte_subs = blk: {
             if (!@hasDecl(ns, op_name)) {
                 // float ops for bytes shouldn't exist
                 switch (opcode) {
-                    .addf, .subf, .mulf, .divf, .modf, .negf => {
+                    .addf, .subf, .mulf, .divf, .modf, .negf, .gtf, .ltf => {
                         if (ns.width == .byte) {
                             continue;
                         }
@@ -531,6 +531,18 @@ fn generic_subs(comptime W: Width) type {
             fn negf(env: *Env, _: *State) Error!void {
                 try env.push(F, -try env.pop(F));
             }
+
+            fn gtf(env: *Env, _: *State) Error!void {
+                const b = try env.pop(F);
+                const a = try env.pop(F);
+                try env.push(bool, a > b);
+            }
+
+            fn ltf(env: *Env, _: *State) Error!void {
+                const b = try env.pop(F);
+                const a = try env.pop(F);
+                try env.push(bool, a < b);
+            }
         };
 
         // include float ops for f16, f32, f64
@@ -633,6 +645,30 @@ fn generic_subs(comptime W: Width) type {
                 error.Overflow => return error.VmIntegerOverflow,
             };
             try env.push(I, res);
+        }
+
+        fn gtu(env: *Env, _: *State) Error!void {
+            const b = try env.pop(U);
+            const a = try env.pop(U);
+            try env.push(bool, a > b);
+        }
+
+        fn gti(env: *Env, _: *State) Error!void {
+            const b = try env.pop(I);
+            const a = try env.pop(I);
+            try env.push(bool, a > b);
+        }
+
+        fn ltu(env: *Env, _: *State) Error!void {
+            const b = try env.pop(U);
+            const a = try env.pop(U);
+            try env.push(bool, a < b);
+        }
+
+        fn lti(env: *Env, _: *State) Error!void {
+            const b = try env.pop(I);
+            const a = try env.pop(I);
+            try env.push(bool, a < b);
         }
 
         fn eq(env: *Env, _: *State) Error!void {

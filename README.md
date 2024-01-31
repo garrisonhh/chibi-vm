@@ -19,9 +19,9 @@ the primary goal is to create a vm that is general enough to do basically any
 computational task, simple enough to read and understand in a day or two, and
 with an interface that is pleasant to hack on.
 
-- [x] math with unsigned + signed integers
-- [x] simple logic
-- [x] pointers, arrays, structs
+- [x] math with unsigned + signed integers and IEEE-754 floating point
+- [x] boolean logic and comparisons
+- [x] arbitrary datatypes (pointers, arrays, structs, unions are all supported)
 - [x] generic control flow
 - [x] functions
 - [x] well-defined call convention and stack mechanics

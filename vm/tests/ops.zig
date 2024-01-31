@@ -548,8 +548,20 @@ fn generic_integer_verifiers(comptime width: Width) type {
             return ~a;
         }
 
-        pub fn eq(a: U, b: U) Env.Error!bool {
-            return a == b;
+        pub fn gtu(a: U, b: U) Env.Error!bool {
+            return a > b;
+        }
+
+        pub fn gti(a: I, b: I) Env.Error!bool {
+            return a > b;
+        }
+
+        pub fn ltu(a: U, b: U) Env.Error!bool {
+            return a < b;
+        }
+
+        pub fn lti(a: I, b: I) Env.Error!bool {
+            return a < b;
         }
 
         pub fn ne(a: U, b: U) Env.Error!bool {
@@ -609,6 +621,14 @@ fn generic_float_verifiers(comptime width: Width) type {
 
         pub fn negf(a: F) Env.Error!F {
             return -a;
+        }
+
+        pub fn gtf(a: F, b: F) Env.Error!bool {
+            return a > b;
+        }
+
+        pub fn ltf(a: F, b: F) Env.Error!bool {
+            return a < b;
         }
     };
 }
