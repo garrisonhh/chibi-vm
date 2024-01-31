@@ -511,6 +511,7 @@ fn generic_subs(comptime W: Width) type {
             fn divf(env: *Env, _: *State) Error!void {
                 const b = try env.pop(F);
                 const a = try env.pop(F);
+                if (b == 0) return Error.VmDivideByZero;
                 try env.push(F, a / b);
             }
 

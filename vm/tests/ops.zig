@@ -341,7 +341,7 @@ fn testFailed(
     std.debug.print("{s}(", .{@tagName(opcode)});
     inline for (args, 0..) |arg, i| {
         if (i > 0) std.debug.print(", ", .{});
-        std.debug.print("({}) {}", .{ @TypeOf(arg), i });
+        std.debug.print("({}) {}", .{ @TypeOf(arg), arg });
     }
     std.debug.print(")\n", .{});
     std.debug.print(fmt ++ "\n", fmt_args);
@@ -585,7 +585,31 @@ fn generic_float_verifiers(comptime width: Width) type {
             return a - b;
         }
 
-        // TODO the rest of the float ops
+        pub fn mulf(a: F, b: F) Env.Error!F {
+            return a * b;
+        }
+
+        pub fn divf(a: F, b: F) Env.Error!F {
+            if (b == 0) {
+                return Env.Error.VmDivideByZero;
+            }
+
+            return a / b;
+        }
+
+        pub fn modf(a: F, b: F) Env.Error!F {
+            if (b == 0) {
+                return Env.Error.VmDivideByZero;
+            } else if (b < 0) {
+                return -@rem(a, -b);
+            }
+
+            return @rem(a, b);
+        }
+
+        pub fn negf(a: F) Env.Error!F {
+            return -a;
+        }
     };
 }
 
