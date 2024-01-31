@@ -347,6 +347,16 @@ const byte_subs = blk: {
             arr[@as(u8, @bitCast(bo))] = &func;
         } else for (generic_sub_namespaces) |ns| {
             if (!@hasDecl(ns, op_name)) {
+                // float ops for bytes shouldn't exist
+                switch (opcode) {
+                    .addf, .subf, .mulf, .divf, .modf, .negf => {
+                        if (ns.width == .byte) {
+                            continue;
+                        }
+                    },
+                    else => {},
+                }
+
                 @compileError("no implementation for opcode: " ++ op_name);
             }
 
@@ -480,7 +490,50 @@ fn generic_subs(comptime W: Width) type {
         const nbits = @as(u7, nbytes) * 8;
         const I = std.meta.Int(.signed, nbits);
         const U = std.meta.Int(.unsigned, nbits);
-        const F = std.meta.Float(nbits);
+
+        const float_ops = struct {
+            const F = std.meta.Float(nbits);
+
+            fn addf(env: *Env, _: *State) Error!void {
+                try env.push(F, try env.pop(F) + try env.pop(F));
+            }
+
+            fn subf(env: *Env, _: *State) Error!void {
+                const b = try env.pop(F);
+                const a = try env.pop(F);
+                try env.push(F, a - b);
+            }
+
+            fn mulf(env: *Env, _: *State) Error!void {
+                try env.push(F, try env.pop(F) * try env.pop(F));
+            }
+
+            fn divf(env: *Env, _: *State) Error!void {
+                const b = try env.pop(F);
+                const a = try env.pop(F);
+                try env.push(F, a / b);
+            }
+
+            fn modf(env: *Env, _: *State) Error!void {
+                const b = try env.pop(F);
+                const a = try env.pop(F);
+
+                if (b == 0) {
+                    return Error.VmDivideByZero;
+                } else if (b < 0) {
+                    try env.push(F, -@rem(a, -b));
+                } else {
+                    try env.push(F, @rem(a, b));
+                }
+            }
+
+            fn negf(env: *Env, _: *State) Error!void {
+                try env.push(F, -try env.pop(F));
+            }
+        };
+
+        // include float ops for f16, f32, f64
+        usingnamespace if (W != .byte) float_ops else struct {};
 
         fn constant(env: *Env, state: *State) Error!void {
             const bytes = state.readNBytes(nbytes);

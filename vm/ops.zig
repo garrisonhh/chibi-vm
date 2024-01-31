@@ -29,17 +29,24 @@ pub const Opcode = enum(u6) {
     /// remove a stack value
     drop,
 
-    // twos-complement math
-    // some need differentiating between signed and unsigned, some don't
+    // math (twos-complement integers, IEEE-754 floating point)
+    // some integer ops need differentiation between signed and unsigned, some
+    // don't
     add,
+    addf,
     sub,
+    subf,
     mulu,
     muli,
+    mulf,
     divu,
     divi,
+    divf,
     modu,
     modi,
+    modf,
     neg,
+    negf,
 
     // logic
     @"or",
@@ -77,6 +84,7 @@ pub const Opcode = enum(u6) {
     // 4. writes `width` bytes at `pointer + offset * width`
     // (this arrived unintentionaly super close to the design of x86 mov!)
     store,
+    // TODO load_offset and store_offset vs variants without?
 
     /// reads u32 length, peeks `dst` ptr and writes zeroes to it
     zero,
@@ -123,13 +131,18 @@ pub const Opcode = enum(u6) {
             => .{ .inputs = 0, .outputs = 1, .sized = false },
 
             .add,
+            .addf,
             .sub,
+            .subf,
             .mulu,
             .muli,
+            .mulf,
             .divu,
             .divi,
+            .divf,
             .modu,
             .modi,
+            .modf,
             .bitand,
             .bitor,
             .bitxor,
@@ -143,6 +156,7 @@ pub const Opcode = enum(u6) {
 
             .eqz,
             .neg,
+            .negf,
             .bitcom,
             .extend,
             .sign_extend,
@@ -210,14 +224,20 @@ pub const ByteOp = packed struct(u8) {
             .dup,
             .drop,
             .add,
+            .addf,
             .sub,
+            .subf,
             .mulu,
             .muli,
+            .mulf,
             .divu,
             .divi,
+            .divf,
             .modu,
             .modi,
+            .modf,
             .neg,
+            .negf,
             .@"and",
             .@"or",
             .not,
@@ -288,14 +308,20 @@ pub const Op = union(Opcode) {
     dup,
     drop,
     add: Width,
+    addf: Width,
     sub: Width,
+    subf: Width,
     mulu: Width,
     muli: Width,
+    mulf: Width,
     divu: Width,
     divi: Width,
+    divf: Width,
     modu: Width,
     modi: Width,
+    modf: Width,
     neg: Width,
+    negf: Width,
     @"and",
     @"or",
     not,

@@ -113,6 +113,7 @@ fn generateRandom(
     return switch (@typeInfo(T)) {
         .Bool => prng.random().boolean(),
         .Int => prng.random().int(T),
+        .Float => @floatCast(prng.random().float(f64)),
         .Array => |meta| array: {
             var array: T = undefined;
             for (&array) |*slot| {
@@ -149,6 +150,22 @@ fn generatePrimitiveCases(
             const max_int = std.math.maxInt(T);
             const min_int = std.math.minInt(T);
             const edges = [_]T{ 0, 1, max_int, min_int };
+            try cases.appendSlice(&edges);
+        },
+        .Float => {
+            const edges = [_]T{
+                0.0,
+                1.0,
+                -1.0,
+                std.math.floatMax(T),
+                std.math.floatMin(T),
+                std.math.floatEps(T),
+                std.math.inf(T),
+                -std.math.floatMax(T),
+                -std.math.floatMin(T),
+                -std.math.floatEps(T),
+                -std.math.inf(T),
+            };
             try cases.appendSlice(&edges);
         },
         else => @compileError("unsupported type: " ++ @typeName(T)),
@@ -348,7 +365,20 @@ fn VerifierResult(comptime T: type) type {
         }
 
         fn eql(self: Self, other: Self) bool {
-            return std.meta.eql(self, other);
+            return switch (@typeInfo(T)) {
+                .Float => f: {
+                    if (@as(std.meta.Tag(Self), self) != other) {
+                        break :f false;
+                    }
+
+                    break :f switch (self) {
+                        .err => self.err == other.err,
+                        .payload => self.payload == other.payload or
+                            std.math.isNan(self.payload) and std.math.isNan(other.payload),
+                    };
+                },
+                else => std.meta.eql(self, other),
+            };
         }
 
         pub fn format(
@@ -442,7 +472,7 @@ const unique_verifiers = struct {
     }
 };
 
-fn generic_verifiers(comptime width: Width) type {
+fn generic_integer_verifiers(comptime width: Width) type {
     const I = std.meta.Int(.signed, @as(u16, width.bytes()) * 8);
     const U = std.meta.Int(.unsigned, @as(u16, width.bytes()) * 8);
     return struct {
@@ -544,6 +574,21 @@ fn generic_verifiers(comptime width: Width) type {
     };
 }
 
+fn generic_float_verifiers(comptime width: Width) type {
+    const F = std.meta.Float(@as(u18, width.bytes()) * 8);
+    return struct {
+        pub fn addf(a: F, b: F) Env.Error!F {
+            return a + b;
+        }
+
+        pub fn subf(a: F, b: F) Env.Error!F {
+            return a - b;
+        }
+
+        // TODO the rest of the float ops
+    };
+}
+
 // operators that transform values into an output value can all be automated
 // with very similar inputs
 test "generated" {
@@ -566,7 +611,16 @@ test "generated" {
     }
 
     inline for (comptime std.enums.values(Width)) |width| {
-        const ns = generic_verifiers(width);
+        const ns = generic_integer_verifiers(width);
+        inline for (@typeInfo(ns).Struct.decls) |decl| {
+            const function = @field(ns, decl.name);
+            const op = @unionInit(Op, decl.name, width);
+            try applyVerifier(@TypeOf(function), function, op);
+        }
+    }
+
+    inline for ([_]Width{.short, .half, .word}) |width| {
+        const ns = generic_float_verifiers(width);
         inline for (@typeInfo(ns).Struct.decls) |decl| {
             const function = @field(ns, decl.name);
             const op = @unionInit(Op, decl.name, width);
