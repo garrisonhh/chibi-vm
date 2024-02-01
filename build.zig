@@ -41,28 +41,54 @@ pub fn build(b: *std.Build) void {
         .source_file = .{ .path = "vm/main.zig" },
     });
 
-    // exe
-    const exe = b.addExecutable(.{
+    // cc
+    const cc = b.addExecutable(.{
         .name = "chibi-vm",
         .root_source_file = .{ .path = "cc/main.zig" },
         .target = target,
         .optimize = optimize,
     });
 
-    exe.linkLibC();
-    exe.addCSourceFiles(&chibi.c_sources, chibi.cFlags(optimize));
-    exe.addModule("chibi", chibi_mod);
-    exe.addModule("vm", vm);
+    cc.linkLibC();
+    cc.addCSourceFiles(&chibi.c_sources, chibi.cFlags(optimize));
+    cc.addModule("chibi", chibi_mod);
+    cc.addModule("vm", vm);
 
-    b.installArtifact(exe);
+    const cc_install = b.addInstallArtifact(cc, .{});
+    const cc_step = b.step("cc", "Build the C interpreter");
+    cc_step.dependOn(&cc_install.step);
 
-    // run
-    const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    const run_cc = b.addRunArtifact(cc);
+    run_cc.step.dependOn(&cc_install.step);
+    if (b.args) |args| run_cc.addArgs(args);
 
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
+    const run_cc_step = b.step("run-cc", "Run the C interpreter");
+    run_cc_step.dependOn(&run_cc.step);
+
+    // mini
+    const mini = b.addExecutable(.{
+        .name = "mini",
+        .root_source_file = .{ .path = "mini/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+
+    mini.addModule("vm", vm);
+
+    const mini_install = b.addInstallArtifact(mini, .{});
+    const mini_step = b.step("mini", "Build mini");
+    mini_step.dependOn(&mini_install.step);
+
+    const run_mini = b.addRunArtifact(mini);
+    run_mini.step.dependOn(&mini_install.step);
+    if (b.args) |args| run_mini.addArgs(args);
+
+    const run_mini_step = b.step("run-mini", "Run mini");
+    run_mini_step.dependOn(&run_mini.step);
+
+    // build everything with default zig build step
+    b.installArtifact(cc);
+    b.installArtifact(mini);
 
     // vm tests
     const unit_tests = b.addTest(.{
