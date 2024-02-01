@@ -52,7 +52,7 @@ pub fn init(text: []const u8) Lexer {
     return .{ .text = text };
 }
 
-pub const Error = error {
+pub const Error = error{
     InvalidCharacter,
 };
 

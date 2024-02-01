@@ -7,13 +7,13 @@ pub fn main() !void {
     const ally = gpa.allocator();
 
     var ast = try parser.parse(ally, "test",
-        \\(this (is) (a (test program)))
+        \\(this (is) (a (test program)) (0 1 2 -3 1.234))
         \\
     );
     defer ast.deinit();
 
     if (ast.err) |err| {
-        std.debug.print("error: {s} at {d}\n", .{@tagName(err.kind), err.start});
+        std.debug.print("error: {s} at {d}\n", .{ @tagName(err.kind), err.start });
         return;
     }
 

@@ -29,7 +29,7 @@ pub const Expr = struct {
     ) @TypeOf(writer).Error!void {
         switch (self.data) {
             .ident, .int, .float => |str| {
-                try writer.print("<{s}>{s}", .{@tagName(self.data), str});
+                try writer.print("<{s}>{s}", .{ @tagName(self.data), str });
             },
             .list => |children| {
                 try writer.print("(", .{});
@@ -44,7 +44,7 @@ pub const Expr = struct {
 };
 
 /// ast represents the syntax for a single file
-pub const Ast = struct{
+pub const Ast = struct {
     const Self = @This();
 
     pub const SyntaxError = struct {
@@ -107,10 +107,79 @@ pub const Ast = struct{
 
 pub const Error = Allocator.Error;
 
+fn isDigit(ch: u8) bool {
+    return ch >= '0' and ch <= '9';
+}
+
+fn isNumeric(ch: u8) bool {
+    return isDigit(ch) or ch == '_';
+}
+
+fn isIdentStart(ch: u8) bool {
+    return switch (ch) {
+        'a'...'z',
+        'A'...'Z',
+        '-',
+        => true,
+        else => false,
+    };
+}
+
+fn isIdentInner(ch: u8) bool {
+    return isIdentStart(ch) or isDigit(ch);
+}
+
+fn isIdentWord(word: []const u8) bool {
+    if (!isIdentStart(word[0])) return false;
+
+    for (word[1..]) |inner| {
+        if (!isIdentInner(inner)) return false;
+    }
+
+    return true;
+}
+
+fn isIntWord(word: []const u8) bool {
+    // skip negative sign
+    const integral = if (word[0] == '-') word[1..] else word;
+
+    if (!isDigit(integral[0])) return false;
+
+    for (word) |ch| {
+        if (!isNumeric(ch)) return false;
+    }
+
+    return true;
+}
+
+fn isFloatWord(word: []const u8) bool {
+    const dot = std.mem.indexOf(u8, word, ".") orelse {
+        return false;
+    };
+    const integral = word[0..dot];
+    const fractional = word[dot + 1 ..];
+
+    if (!isIntWord(integral)) return false;
+
+    for (fractional) |ch| {
+        if (!isNumeric(ch)) return false;
+    }
+
+    return true;
+}
+
 /// classifies a word token, returns null if it's unidentifiable
 fn classify(word: []const u8) ?Expr.Data {
-    // TODO
-    return .{ .ident = word };
+    std.debug.assert(word.len > 0);
+    if (isIdentWord(word)) {
+        return .{ .ident = word };
+    } else if (isIntWord(word)) {
+        return .{ .int = word };
+    } else if (isFloatWord(word)) {
+        return .{ .float = word };
+    }
+
+    return null;
 }
 
 /// returns null on syntax error
