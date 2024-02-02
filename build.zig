@@ -91,16 +91,30 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(mini);
 
     // vm tests
-    const unit_tests = b.addTest(.{
+    const vm_tests = b.addTest(.{
         .root_source_file = .{ .path = "vm/tests/tests.zig" },
         .target = target,
         .optimize = optimize,
     });
 
-    unit_tests.addModule("vm", vm);
+    vm_tests.addModule("vm", vm);
 
-    const run_unit_tests = b.addRunArtifact(unit_tests);
+    const run_vm_tests = b.addRunArtifact(vm_tests);
 
-    const test_step = b.step("test", "Run vm tests");
-    test_step.dependOn(&run_unit_tests.step);
+    const vm_test_step = b.step("test-vm", "Run vm tests");
+    vm_test_step.dependOn(&run_vm_tests.step);
+
+    // mini tests
+    const mini_tests = b.addTest(.{
+        .root_source_file = .{ .path = "mini/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+
+    mini_tests.addModule("vm", vm);
+
+    const run_mini_tests = b.addRunArtifact(vm_tests);
+
+    const mini_test_step = b.step("test-mini", "Run mini tests");
+    mini_test_step.dependOn(&run_mini_tests.step);
 }
