@@ -1,18 +1,30 @@
 /// global language systems that need to be accessible throughout the lower
 /// stages of compilation
-
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 // string interning ============================================================
 
-/// an interned string in a string pool
+/// an interned string in the string pool
 pub const String = packed struct(u64) {
     offset: u32,
     len: u32,
 
     pub fn eql(a: String, b: String) bool {
         return a.offset == b.offset;
+    }
+
+    pub fn slice(s: String) []const u8 {
+        return strings.mem.items[s.offset .. s.offset + s.len];
+    }
+
+    pub fn format(
+        self: String,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        try writer.print("{s}", .{self.slice()});
     }
 };
 
@@ -135,11 +147,18 @@ const NamePool = struct {
         ns: ?Name,
         ident: []const u8,
     ) Allocator.Error!Name {
-        _ = self;
-        _ = ally;
-        _ = ns;
-        _ = ident;
-        @panic("TODO");
+        const node = Node{
+            .ns = ns,
+            .ident = string(ident),
+        };
+
+        const res = try self.scope.getOrPut(ally, node);
+        if (!res.found_existing) {
+            const nm = Name{ .id = self.scope.count() };
+            res.value_ptr.* = nm;
+        }
+
+        return res.value_ptr.*;
     }
 };
 
@@ -161,10 +180,21 @@ pub fn deinit() void {
     strings.deinit(ally);
 }
 
+fn oom() noreturn {
+    std.debug.print("unrecoverable out of memory\n", .{});
+    std.process.exit(1);
+}
+
 /// place a string in the string pool
-pub fn string(str: []const u8) Allocator.Error!String {
+pub fn string(str: []const u8) String {
     const ally = gpa.allocator();
-    return try strings.intern(ally, str);
+    return strings.intern(ally, str) catch oom();
+}
+
+/// get/retrieve a name
+pub fn name(ns: ?Name, ident: []const u8) Name {
+    const ally = gpa.allocator();
+    return names.intern(ally, ns, ident) catch oom();
 }
 
 // tests =======================================================================
@@ -180,4 +210,8 @@ test "string interning" {
     try std.testing.expect(a.eql(c));
     try std.testing.expect(!a.eql(b));
     try std.testing.expect(!b.eql(c));
+
+    try std.testing.expectEqualStrings("hello", a.slice());
+    try std.testing.expectEqualStrings("world", a.slice());
+    try std.testing.expectEqualStrings("hello", c.slice());
 }
