@@ -1,13 +1,15 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Lexer = @import("Lexer.zig");
+const mini = @import("mini.zig");
+const Name = mini.Name;
 
 pub const Expr = struct {
     const Self = @This();
     pub const Kind = std.meta.Tag(Data);
 
     pub const Data = union(enum) {
-        ident: []const u8,
+        ident: mini.String,
         int: []const u8,
         float: []const u8,
         list: []const Expr,
@@ -28,7 +30,10 @@ pub const Expr = struct {
         writer: anytype,
     ) @TypeOf(writer).Error!void {
         switch (self.data) {
-            .ident, .int, .float => |str| {
+            .ident => |str| {
+                try writer.print("<{s}>{}", .{ @tagName(self.data), str });
+            },
+            .int, .float => |str| {
                 try writer.print("<{s}>{s}", .{ @tagName(self.data), str });
             },
             .list => |children| {
@@ -68,25 +73,35 @@ pub const Ast = struct {
     // this is set when a syntax error is produced
     err: ?SyntaxError = null,
 
-    /// name of source
-    name: []const u8,
+    /// string filename of source
+    filename: []const u8,
     /// content of source
     text: []const u8,
+    /// mini name of source
+    name: Name,
     /// top level program
     toplevel: std.ArrayListUnmanaged(Expr) = .{},
 
-    fn init(ally: Allocator, name: []const u8, text: []const u8) Self {
+    fn init(ally: Allocator, filename: []const u8, text: []const u8) Self {
         return Self{
             .ally = ally,
             .arena = std.heap.ArenaAllocator.init(ally),
-            .name = name,
+            .filename = filename,
             .text = text,
+            .name = nameOfFilename(filename),
         };
     }
 
     pub fn deinit(self: *Self) void {
         self.toplevel.deinit(self.ally);
         self.arena.deinit();
+    }
+
+    fn nameOfFilename(filename: []const u8) Name {
+        const basename = std.fs.path.basename(filename);
+        const ext_index = std.mem.indexOf(u8, basename, ".") orelse basename.len;
+        const base = basename[0..ext_index];
+        return mini.name(null, mini.string(base));
     }
 
     fn syntaxError(
@@ -172,7 +187,7 @@ fn isFloatWord(word: []const u8) bool {
 fn classify(word: []const u8) ?Expr.Data {
     std.debug.assert(word.len > 0);
     if (isIdentWord(word)) {
-        return .{ .ident = word };
+        return .{ .ident = mini.string(word) };
     } else if (isIntWord(word)) {
         return .{ .int = word };
     } else if (isFloatWord(word)) {
