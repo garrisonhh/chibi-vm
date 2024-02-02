@@ -17,8 +17,8 @@ const SourceLoc = struct {
         len: usize,
     ) SourceLoc {
         const text_start = std.mem.lastIndexOf(u8, source[0..start], "\n") orelse 0;
-        const stop_offset = std.mem.indexOf(u8, source[start..], "\n");
-        const text_stop = if (stop_offset) |offset| start + offset else source.len;
+        const stop_offset = std.mem.indexOf(u8, source[start + len..], "\n");
+        const text_stop = if (stop_offset) |offset| start + len + offset else source.len;
         const text = source[text_start..text_stop];
 
         const line_index = std.mem.count(u8, source[0..start], "\n");
@@ -39,16 +39,15 @@ const SourceLoc = struct {
     ) @TypeOf(writer).Error!void {
         const lineno = loc.line_index + 1;
 
+        // display line
         var buf: [64]u8 = undefined;
         const meta = std.fmt.bufPrint(&buf, "{d} | ", .{lineno}) catch {
             unreachable;
         };
-
         try writer.print("{s}{s}\n", .{meta, loc.text});
 
-        const hl_offset = meta.len + loc.char_index;
-        try writer.writeByteNTimes(' ', hl_offset);
-
+        // highlight
+        try writer.writeByteNTimes(' ', meta.len + loc.char_index);
         if (loc.len == 0) {
             try writer.writeByte('^');
         } else {
@@ -61,8 +60,46 @@ const SourceLoc = struct {
         loc: SourceLoc,
         writer: anytype,
     ) @TypeOf(writer).Error!void {
-        _ = loc;
-        @panic("TODO display multiline context");
+        const line_count = 1 + std.mem.count(u8, loc.text, "\n");
+        std.debug.assert(line_count > 1);
+        const last_newline_offset = std.mem.lastIndexOf(u8, loc.text, "\n").?;
+        const following_char_index = loc.text.len - last_newline_offset - 1;
+
+        // calculate offset for meta
+        const final_lineno = loc.line_index + line_count;
+        const meta_fmt = "{d} | ";
+        const max_meta_len = std.fmt.count(meta_fmt, .{final_lineno});
+
+        // leading arrow
+        try writer.writeByteNTimes(' ', max_meta_len + loc.char_index);
+        try writer.writeAll("v\n");
+
+        // display lines
+        var i: usize = 0;
+        var lines = std.mem.split(u8, loc.text, "\n");
+        while (lines.next()) |line| : (i += 1) {
+            // elide massive multiline errors
+            if (line_count > 7 and (i >= 3 and i < line_count - 3)) {
+                if (i == 3) {
+                    try writer.writeByteNTimes(' ', max_meta_len);
+                    try writer.writeAll("...\n");
+                }
+                continue;
+            }
+
+            const lineno = loc.line_index + i + 1;
+
+            var buf: [64]u8 = undefined;
+            const meta = std.fmt.bufPrint(&buf, meta_fmt, .{lineno}) catch {
+                unreachable;
+            };
+            try writer.writeByteNTimes(' ', meta.len - max_meta_len);
+            try writer.print("{s}{s}\n", .{meta, line});
+        }
+
+        // following arrow
+        try writer.writeByteNTimes(' ', max_meta_len + following_char_index);
+        try writer.writeAll("^\n");
     }
 
     fn display(loc: SourceLoc, writer: anytype) @TypeOf(writer).Error!void {
@@ -121,7 +158,14 @@ pub fn main() !void {
     defer mini.deinit();
 
     var ast = try parser.parse(ally, "test",
-        \\(as i32 4))
+        \\(as i32
+        \\  (+
+        \\     4
+        \\     5
+        \\     10
+        \\     10
+        \\     10
+        \\     11)
         \\
     );
     defer ast.deinit();

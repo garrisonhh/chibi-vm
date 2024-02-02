@@ -134,9 +134,8 @@ fn isIdentStart(ch: u8) bool {
     return switch (ch) {
         'a'...'z',
         'A'...'Z',
-        '-',
         => true,
-        else => false,
+        else => Lexer.isSymbol(ch),
     };
 }
 
