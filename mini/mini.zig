@@ -155,7 +155,8 @@ const NamePool = struct {
 
     scope: Scope = .{},
 
-    fn deinit(self: *Self) void {
+    fn deinit(self: *Self, ally: Allocator) void {
+        self.scope.deinit(ally);
         self.* = undefined;
     }
 
@@ -187,39 +188,369 @@ const NamePool = struct {
     }
 };
 
+// types =======================================================================
+
+pub const Type = struct {
+    id: u32,
+
+    pub fn eql(a: Type, b: Type) bool {
+        return a.id == b.id;
+    }
+};
+
+pub const TypeInfo = union(enum) {
+    const Self = @This();
+    pub const Kind = std.meta.Tag(@This());
+
+    pub const Distinct = struct {
+        distinct_id: usize,
+        child: Type,
+    };
+
+    pub const Pointer = struct {
+        pub const Kind = enum { single, many };
+
+        /// pointers can be aligned wider than their natural alignment
+        alignment: usize,
+        kind: Pointer.Kind,
+        child: Type,
+    };
+
+    pub const Field = struct {
+        offset: usize,
+        ident: String,
+        type: Type,
+    };
+
+    pub const Composite = struct {
+        size: usize,
+        alignment: usize,
+        fields: []const Field,
+    };
+
+    unit,
+    bool,
+    /// contains byte count
+    int: u8,
+    /// contains byte count
+    float: u8,
+    option: Type,
+    /// a unique version of a different type
+    distinct: Distinct,
+    ptr: Pointer,
+    @"struct": Composite,
+
+    fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
+        return switch (self) {
+            .unit, .bool, .int, .float, .option, .distinct, .ptr, => self,
+
+            .@"struct" => |st| Self{ .@"struct" = .{
+                .size = st.size,
+                .alignment = st.alignment,
+                .fields = try ally.dupe(Field, st.fields),
+            } },
+        };
+    }
+};
+
+const TypeSet = struct {
+    const Self = @This();
+
+    const hash_seed = 0xDEADBEEF;
+
+    const SetContext = struct {
+        metas: []const TypeInfo,
+        self: ?Type,
+        
+        fn hashChild(
+            ctx: @This(),
+            hasher: *std.hash.Wyhash,
+            child: Type,
+        ) void {
+            // don't recurse on yourself
+            if (ctx.self) |itself| {
+                if (itself.eql(child)) {
+                    hasher.update(&.{0});
+                    return;
+                }
+            }
+
+            ctx.hashRecursive(hasher, ctx.metas[child.id]);
+        }
+
+        fn hashRecursive(
+            ctx: @This(),
+            hasher: *std.hash.Wyhash,
+            key: TypeInfo,
+        ) void {
+            hasher.update(std.mem.asBytes(&@as(TypeInfo.Kind, key)));
+
+            switch (key) {
+                .unit, .bool => {},
+                .int, .float => |nbytes| {
+                    hasher.update(&.{nbytes});
+                },
+                .option => |child| {
+                    ctx.hashChild(hasher, child);
+                },
+                .distinct => |d| {
+                    hasher.update(std.mem.asBytes(&d.distinct_id));
+                    ctx.hashChild(hasher, d.child);
+                },
+                .ptr => |ptr| {
+                    hasher.update(std.mem.asBytes(&ptr.alignment));
+                    hasher.update(std.mem.asBytes(&ptr.kind));
+                    ctx.hashChild(hasher, ptr.child);
+                },
+                .@"struct" => |st| {
+                    for (st.fields) |field| {
+                        hasher.update(std.mem.asBytes(&field.offset));
+                        hasher.update(std.mem.asBytes(&field.ident));
+                        ctx.hashChild(hasher, field.type);
+                    }
+                },
+            }
+        }
+
+        pub fn hash(ctx: @This(), key: TypeInfo) u32 {
+            var hasher = std.hash.Wyhash.init(hash_seed);
+            ctx.hashRecursive(&hasher, key);
+            return @truncate(hasher.final());
+        }
+
+        fn isSelf(x: Type, self: ?Type) bool {
+            return if (self) |t| x.eql(t) else false;
+        }
+
+        /// check if two types are equal with self referentiation awareness
+        fn typeEqlSelf(a: Type, aself: ?Type, b: Type, bself: ?Type) bool {
+            const a_is_self = isSelf(a, aself);
+            const b_is_self = isSelf(b, bself);
+
+            if (a_is_self and b_is_self) {
+                return true;
+            } else if (a_is_self or b_is_self) {
+                return false;
+            }
+
+            return a.eql(b);
+        }
+
+        pub fn eql(
+            ctx: @This(),
+            a: TypeInfo,
+            b: TypeInfo,
+            b_index: usize,
+        ) bool {
+            if (@as(TypeInfo.Kind, a) != @as(TypeInfo.Kind, b)) {
+                return false;
+            }
+
+            const aself = ctx.self;
+            const bself = Type{ .id = @intCast(b_index) };
+
+            switch (a) {
+                .unit, .bool => {},
+                inline .int, .float => |a_nbytes, tag| {
+                    const b_nbytes = @field(b, @tagName(tag));
+                    if (a_nbytes != b_nbytes) return false;
+                },
+                .option => |achild| {
+                    const bchild = b.option;
+                    if (!typeEqlSelf(achild, aself, bchild, bself)) {
+                        return false;
+                    }
+                },
+                .distinct => |ad| {
+                    const bd = b.distinct;
+                    if (ad.distinct_id != bd.distinct_id or
+                        !typeEqlSelf(ad.child, aself, bd.child, bself))
+                    {
+                        return false;
+                    }
+                },
+                .ptr => |aptr| {
+                    const bptr = b.ptr;
+                    if (aptr.alignment != bptr.alignment or
+                        aptr.kind != bptr.kind or
+                        !typeEqlSelf(aptr.child, aself, bptr.child, bself))
+                    {
+                        return false;
+                    }
+                },
+                .@"struct" => |ast| {
+                    const bst = b.@"struct";
+
+                    if (ast.fields.len != bst.fields.len) {
+                        return false;
+                    }
+
+                    for (ast.fields, bst.fields) |afield, bfield| {
+                        if (afield.offset != bfield.offset or
+                            !afield.ident.eql(bfield.ident) or
+                            !typeEqlSelf(afield.type, aself, bfield.type, bself))
+                        {
+                            return false;
+                        }
+                    }
+                },
+            }
+
+            return true;
+        }
+    };
+
+    const Set = std.ArrayHashMapUnmanaged(
+        TypeInfo,
+        void,
+        SetContext,
+        true,
+    );
+
+    /// used for storing typemetas
+    arena: std.heap.ArenaAllocator,
+    set: Set = .{},
+    distinct_counter: usize = 0,
+
+    /// provide backing ally for typemeta arena
+    fn init(backing_ally: Allocator) Self {
+        return Self{
+            .arena = std.heap.ArenaAllocator.init(backing_ally),
+        };
+    }
+
+    fn deinit(self: *Self, ally: Allocator) void {
+        self.set.deinit(ally);
+        self.arena.deinit();
+    }
+
+    /// get a distinct number
+    fn nextDistinct(self: *Self) usize {
+        defer self.distinct_counter += 1;
+        return self.distinct_counter;
+    }
+
+    /// use this to reserve a self-referential type
+    fn reserveType(self: *Self, ally: Allocator) Allocator.Error!Type {
+        // creates a (useless) distinct unit type which can later be
+        // replaced
+        const unit = try self.intern(ally, null, .unit);
+        return try self.intern(ally, null, .{ .distinct = .{
+            .distinct_id = self.nextDistinct(),
+            .child = unit,
+        } });
+    }
+
+    fn intern(self: *Self, ally: Allocator, itself: ?Type, meta: TypeInfo,) Allocator.Error!Type {
+        const ctx = SetContext{
+            .metas = self.set.keys(),
+            .self = itself,
+        };
+
+        const res = try self.set.getOrPutContext(ally, meta, ctx);
+        if (!res.found_existing) {
+            res.key_ptr.* = try meta.clone(self.arena.allocator());
+            if (itself) |reserved| {
+                // self-referential type should replace its reserved
+                // self-reference
+                const reserved_meta = self.get(reserved);
+                const success = self.set.swapRemoveContext(reserved_meta, ctx);
+                std.debug.assert(success);
+
+                return reserved;
+            }
+        }
+
+        return Type{ .id = @intCast(res.index) };
+    }
+
+    fn get(self: Self, ty: Type) TypeInfo {
+        return self.set.keys()[ty.id];
+    }
+
+    /// get the size in bytes of a type
+    ///
+    /// *this is a trivial operation*
+    fn sizeOf(self: Self, ty: Type) usize {
+        return switch (self.get(ty)) {
+            .unit => 0,
+            .@"bool" => 1,
+            .int, .float => |nbytes| nbytes,
+            // TODO check this
+            .option => |child| self.sizeOf(child),
+            .distinct => |d| self.sizeOf(d.child),
+            .ptr => 8,
+            .@"struct" => |st| st.size,
+        };
+    }
+
+    /// get the alignment in bytes of a type
+    ///
+    /// *this is a trivial operation*
+    fn alignOf(self: Self, ty: Type) usize {
+        return switch (self.get(ty)) {
+            .unit => 0,
+            .@"bool" => 1,
+            .int, .float => |nbytes| nbytes,
+            // TODO check this
+            .option => |child| self.sizeOf(child),
+            .distinct => |d| self.alignOf(d.child),
+            .ptr => 8,
+            .@"struct" => |st| st.alignment,
+        };
+    }
+
+    /// get the aligned size in bytes of a type (for purposes like calculating
+    /// array size)
+    ///
+    /// *this is a trivial operation*
+    fn alignedSizeOf(self: Self, ty: Type) usize {
+        return std.mem.alignForward(usize, self.sizeOf(ty), self.alignOf(ty));
+    }
+};
+
 // interface ===================================================================
 
 var gpa: std.heap.GeneralPurposeAllocator(.{}) = undefined;
 var strings: Strings = undefined;
 var names: NamePool = undefined;
+var typeset: TypeSet = undefined;
 
 pub fn init() void {
+    // order matters a lot here, these rely extensively on each other
     gpa = .{};
+    const ally = gpa.allocator();
+
     strings = .{};
     names = .{};
+    typeset = TypeSet.init(ally);
 }
 
 pub fn deinit() void {
     const ally = gpa.allocator();
-    names.deinit();
+
+    typeset.deinit(ally);
+    names.deinit(ally);
     strings.deinit(ally);
 }
 
-fn oom() noreturn {
-    std.debug.print("unrecoverable out of memory\n", .{});
-    std.process.exit(1);
+fn must(x: anytype) @typeInfo(@TypeOf(x)).ErrorUnion.payload {
+    return x catch |e| {
+        std.debug.print("unrecoverable error: {s}", .{@errorName(e)});
+        std.process.exit(1);
+    };
 }
 
 /// place a string in the string pool
 pub fn string(str: []const u8) String {
     const ally = gpa.allocator();
-    return strings.intern(ally, str) catch oom();
+    return must(strings.intern(ally, str));
 }
 
 /// get/retrieve a name
 pub fn name(ns: ?Name, ident: String) Name {
     const ally = gpa.allocator();
-    return names.intern(ally, ns, ident) catch oom();
+    return must(names.intern(ally, ns, ident));
 }
 
 /// get the namespace of a name
@@ -231,6 +562,124 @@ pub fn namespace(nm: Name) ?Name {
 pub fn namebase(nm: Name) String {
     return names.get(nm).ident;
 }
+
+pub const types = struct {
+    pub fn get(ty: Type) TypeInfo {
+        return typeset.get(ty);
+    }
+
+    pub fn sizeOf(ty: Type) usize {
+        return typeset.sizeOf(ty);
+    }
+
+    pub fn alignOf(ty: Type) usize {
+        return typeset.alignOf(ty);
+    }
+
+    pub fn alignedSizeOf(ty: Type) usize {
+        return typeset.alignedSizeOf(ty);
+    }
+
+    fn make(itself: ?Type, meta: TypeInfo) Type {
+        const ally = gpa.allocator();
+        return must(typeset.intern(ally, itself, meta));
+    }
+
+    /// reserve a type to create self referential types
+    pub fn self() Type {
+        const ally = gpa.allocator();
+        return must(typeset.reserveType(ally));
+    }
+
+    pub fn freeSelf(ty: Type) void {
+        must(typeset.freeUnusedType(ty));
+    }
+
+    pub fn unit() Type {
+        return make(null, .unit);
+    }
+
+    pub fn @"bool"() Type {
+        return make(null, .bool);
+    }
+
+    pub fn int(nbytes: u8) Type {
+        return make(null, .{ .int = nbytes });
+    }
+
+    pub fn float(nbytes: u8) Type {
+        return make(null, .{ .float = nbytes });
+    }
+
+    pub fn option(ty: Type) Type {
+        return make(null, .{ .option = ty });
+    }
+
+    pub fn distinct(ty: Type) Type {
+        return make(null, .{ .distinct = .{
+            .distinct_id = typeset.nextDistinct(),
+            .child = ty,
+        } });
+    }
+
+    pub const PointerKind = TypeInfo.Pointer.Kind;
+
+    /// if alignment is null, natural alignment of child will be used
+    pub fn ptr(kind: PointerKind, aln: ?usize, child: Type) Type {
+        return make(null, .{ .ptr = .{
+            .kind = kind,
+            .alignment = aln orelse alignOf(child),
+            .child = child,
+        } });
+    }
+
+    pub const StructField = struct {
+        ident: String,
+        type: Type,
+    };
+
+    /// sort struct fields by descending alignment
+    fn structFieldSorter(_: void, a: TypeInfo.Field, b: TypeInfo.Field) bool {
+        const aln_a = alignOf(a.type);
+        const aln_b = alignOf(b.type);
+        return aln_a > aln_b;
+    }
+
+    pub fn @"struct"(itself: ?Type, fields: []const StructField) Type {
+        const ally = gpa.allocator();
+        const meta_fields = must(ally.alloc(TypeInfo.Field, fields.len));
+        defer ally.free(meta_fields);
+
+        // collect struct fields without calculating offset yet
+        for (fields, meta_fields) |field, *slot| {
+            slot.* = TypeInfo.Field{
+                .offset = 0,
+                .ident = field.ident,
+                .type = field.type,
+            };
+        }
+
+        // sort by descending alignment
+        std.sort.block(TypeInfo.Field, meta_fields, {}, structFieldSorter);
+
+        // deduce actual field offsets
+        var size: usize = 0;
+        var aln: usize = 0;
+        for (meta_fields) |*field| {
+            const field_aln = alignOf(field.type);
+            size = std.mem.alignForward(usize, size, field_aln);
+            aln = @max(aln, field_aln);
+            field.offset = size;
+            size += sizeOf(field.type);
+        }
+
+        return make(itself, .{ .@"struct" = .{
+            .size = size,
+            .alignment = aln,
+            .fields = meta_fields,
+        } });
+    }
+};
 
 // tests =======================================================================
 
@@ -275,4 +724,84 @@ test "name interning" {
         "{} {} {} {} {} {}",
         .{ a, b, c, bc, bc2, ac },
     );
+}
+
+test "primitive types" {
+    init();
+    defer deinit();
+
+    const unit = types.unit();
+    const unit2 = types.unit();
+    const distinct_unit = types.distinct(types.unit());
+    const @"bool" = types.@"bool"();
+    const @"i32" = types.int(4);
+    const @"i32_2" = types.int(4);
+    const @"f64" = types.float(8);
+
+    try std.testing.expectEqual(unit, unit2);
+    try std.testing.expectEqual(@"i32", @"i32_2");
+    try std.testing.expect(!@"i32".eql(unit));
+    try std.testing.expect(!distinct_unit.eql(unit));
+
+    try std.testing.expectEqual(@as(usize, 0), types.sizeOf(unit));
+    try std.testing.expectEqual(@as(usize, 1), types.sizeOf(@"bool"));
+    try std.testing.expectEqual(@as(usize, 4), types.sizeOf(@"i32"));
+    try std.testing.expectEqual(@as(usize, 8), types.sizeOf(@"f64"));
+
+    try std.testing.expectEqual(@as(usize, 0), types.alignOf(unit));
+    try std.testing.expectEqual(@as(usize, 1), types.alignOf(@"bool"));
+    try std.testing.expectEqual(@as(usize, 4), types.alignOf(@"i32"));
+    try std.testing.expectEqual(@as(usize, 8), types.alignOf(@"f64"));
+
+    try std.testing.expectEqual(@as(u32, 0), unit.id);
+    try std.testing.expectEqual(@as(u32, 1), distinct_unit.id);
+    try std.testing.expectEqual(@as(u32, 2), @"bool".id);
+    try std.testing.expectEqual(@as(u32, 3), @"i32".id);
+    try std.testing.expectEqual(@as(u32, 4), @"f64".id);
+}
+
+test "trivial structs" {
+    init();
+    defer deinit();
+
+    const a = types.@"struct"(null, &.{});
+    const b = types.@"struct"(null, &.{});
+
+    try std.testing.expectEqual(a, b);
+    try std.testing.expectEqual(@as(usize, 0), types.sizeOf(a));
+    try std.testing.expectEqual(@as(usize, 0), types.alignOf(a));
+
+    const c = types.@"struct"(null, &[_]types.StructField{
+        .{ .ident = string("x"), .type = types.int(4) },
+        .{ .ident = string("y"), .type = types.int(4) },
+    });
+    try std.testing.expectEqual(@as(usize, 8), types.sizeOf(c));
+    try std.testing.expectEqual(@as(usize, 4), types.alignOf(c));
+}
+
+test "self-referential struct" {
+    init();
+    defer deinit();
+
+    const listnode = types.self();
+    const ptr_listnode = types.ptr(.single, null, listnode);
+    const opt_ptr_listnode = types.option(ptr_listnode);
+
+    const resolved = types.@"struct"(listnode, &[_]types.StructField{
+        .{ .ident = string("next"), .type = opt_ptr_listnode  },
+        .{ .ident = string("data"), .type = types.int(4) },
+    });
+
+    const listnode2 = types.self();
+    const ptr_listnode2 = types.ptr(.single, null, listnode2);
+    const opt_ptr_listnode2 = types.option(ptr_listnode2);
+
+    const resolved2 = types.@"struct"(listnode, &[_]types.StructField{
+        .{ .ident = string("next"), .type = opt_ptr_listnode2  },
+        .{ .ident = string("data"), .type = types.int(4) },
+    });
+    const distinct_resolved = types.distinct(resolved);
+
+    try std.testing.expectEqual(resolved, resolved2);
+    try std.testing.expect(!resolved.eql(distinct_resolved));
 }
