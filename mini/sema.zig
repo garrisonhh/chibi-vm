@@ -3,12 +3,21 @@ const mini = @import("mini.zig");
 const Name = mini.Name;
 const Type = mini.Type;
 const parser = @import("parser.zig");
-const Expr = parser.Expr;
+const SExpr = parser.SExpr;
 const Ast = parser.Ast;
 
-pub const Decl = struct {
+pub const TExpr = struct {
     const Self = @This();
+    pub const Kind = std.meta.Tag(Data);
 
-    name: Name,
-    type: mini.Type,
+    pub const Data = union(enum) {
+    };
+
+    type: Type,
+    data: Data,
+};
+
+/// typed intermediate representation
+pub const Tir = struct {
+
 };

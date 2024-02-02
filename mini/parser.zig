@@ -4,7 +4,7 @@ const Lexer = @import("Lexer.zig");
 const mini = @import("mini.zig");
 const Name = mini.Name;
 
-pub const Expr = struct {
+pub const SExpr = struct {
     const Self = @This();
     pub const Kind = std.meta.Tag(Data);
 
@@ -12,7 +12,7 @@ pub const Expr = struct {
         ident: mini.String,
         int: []const u8,
         float: []const u8,
-        list: []const Expr,
+        list: []const SExpr,
     };
 
     span_start: usize,
@@ -80,7 +80,7 @@ pub const Ast = struct {
     /// mini name of source
     name: Name,
     /// top level program
-    toplevel: std.ArrayListUnmanaged(Expr) = .{},
+    toplevel: std.ArrayListUnmanaged(SExpr) = .{},
 
     fn init(ally: Allocator, filename: []const u8, text: []const u8) Self {
         return Self{
@@ -183,7 +183,7 @@ fn isFloatWord(word: []const u8) bool {
 }
 
 /// classifies a word token, returns null if it's unidentifiable
-fn classify(word: []const u8) ?Expr.Data {
+fn classify(word: []const u8) ?SExpr.Data {
     std.debug.assert(word.len > 0);
     if (isIdentWord(word)) {
         return .{ .ident = mini.string(word) };
@@ -197,10 +197,10 @@ fn classify(word: []const u8) ?Expr.Data {
 }
 
 /// returns null on syntax error
-fn parseExpr(lexer: *Lexer, ast: *Ast, initial: Lexer.Token) Error!?Expr {
-    const expr: Expr = switch (initial.kind) {
+fn parseExpr(lexer: *Lexer, ast: *Ast, initial: Lexer.Token) Error!?SExpr {
+    const expr: SExpr = switch (initial.kind) {
         .lparen => list: {
-            var children = std.ArrayList(Expr).init(ast.ally);
+            var children = std.ArrayList(SExpr).init(ast.ally);
             defer children.deinit();
 
             while (true) {
@@ -228,8 +228,8 @@ fn parseExpr(lexer: *Lexer, ast: *Ast, initial: Lexer.Token) Error!?Expr {
             }
 
             const arena_ally = ast.arena.allocator();
-            const arena_children = try arena_ally.dupe(Expr, children.items);
-            break :list Expr{
+            const arena_children = try arena_ally.dupe(SExpr, children.items);
+            break :list SExpr{
                 .span_start = initial.start,
                 .span_len = lexer.index - initial.start,
                 .data = .{ .list = arena_children },
@@ -246,7 +246,7 @@ fn parseExpr(lexer: *Lexer, ast: *Ast, initial: Lexer.Token) Error!?Expr {
                 return null;
             };
 
-            break :word Expr{
+            break :word SExpr{
                 .span_start = initial.start,
                 .span_len = initial.len,
                 .data = data,

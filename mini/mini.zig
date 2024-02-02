@@ -1,5 +1,6 @@
 /// global language systems that need to be accessible throughout the lower
 /// stages of compilation
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -196,6 +197,52 @@ pub const Type = struct {
     pub fn eql(a: Type, b: Type) bool {
         return a.id == b.id;
     }
+
+    fn formatChild(
+        self: Type,
+        child: Type,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        if (child.eql(self)) {
+            try writer.writeAll("Self");
+        } else {
+            try writer.print("{}", .{child});
+        }
+    }
+
+    pub fn format(
+        ty: Type,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        const info = types.get(ty);
+        switch (info) {
+            .unit, .type, .bool => try writer.writeAll(@tagName(info)),
+            .int => |nbytes| try writer.print("i{d}", .{nbytes * 8}),
+            .float => |nbytes| try writer.print("f{d}", .{nbytes * 8}),
+            .option => |child| try writer.print("(option {})", .{child}),
+            .distinct => |d| try writer.print(
+                "(distinct {d} {})", .{d.distinct_id, d.child},),
+            .ptr => |ptr|
+                try writer.print("(ptr {s} {d} {})", .{@tagName(ptr.kind), ptr.alignment, ptr.child},),
+            .function => |func| {
+                try writer.writeAll("(func (");
+                for (func.params, 0..) |param, i| {
+                    if (i > 0) try writer.writeAll(" ");
+                    try writer.print("{}", .{param});
+                }
+                try writer.print(" {})", .{func.returns});
+            },
+            .@"struct" => |st| {
+                try writer.writeAll("(struct");
+                for (st.fields) |field| {
+                    try writer.print(" {}", .{field.type});
+                }
+                try writer.writeAll(")");
+            },
+        }
+    }
 };
 
 pub const TypeInfo = union(enum) {
@@ -216,9 +263,13 @@ pub const TypeInfo = union(enum) {
         child: Type,
     };
 
+    pub const Function = struct {
+        params: []const Type,
+        returns: Type,
+    };
+
     pub const Field = struct {
         offset: usize,
-        ident: String,
         type: Type,
     };
 
@@ -229,6 +280,7 @@ pub const TypeInfo = union(enum) {
     };
 
     unit,
+    type,
     bool,
     /// contains byte count
     int: u8,
@@ -238,12 +290,17 @@ pub const TypeInfo = union(enum) {
     /// a unique version of a different type
     distinct: Distinct,
     ptr: Pointer,
+    function: Function,
     @"struct": Composite,
 
     fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
-            .unit, .bool, .int, .float, .option, .distinct, .ptr, => self,
+            .unit, .type, .bool, .int, .float, .option, .distinct, .ptr, => self,
 
+            .function => |func| Self{ .function = .{
+                .params = try ally.dupe(Type, func.params),
+                .returns = func.returns,
+            } },
             .@"struct" => |st| Self{ .@"struct" = .{
                 .size = st.size,
                 .alignment = st.alignment,
@@ -261,7 +318,7 @@ const TypeSet = struct {
     const SetContext = struct {
         metas: []const TypeInfo,
         self: ?Type,
-        
+
         fn hashChild(
             ctx: @This(),
             hasher: *std.hash.Wyhash,
@@ -286,12 +343,18 @@ const TypeSet = struct {
             hasher.update(std.mem.asBytes(&@as(TypeInfo.Kind, key)));
 
             switch (key) {
-                .unit, .bool => {},
+                .unit, .type, .bool => {},
                 .int, .float => |nbytes| {
                     hasher.update(&.{nbytes});
                 },
                 .option => |child| {
                     ctx.hashChild(hasher, child);
+                },
+                .function => |func| {
+                    for (func.params) |param| {
+                        ctx.hashChild(hasher, param);
+                    }
+                    ctx.hashChild(hasher, func.returns);
                 },
                 .distinct => |d| {
                     hasher.update(std.mem.asBytes(&d.distinct_id));
@@ -305,7 +368,6 @@ const TypeSet = struct {
                 .@"struct" => |st| {
                     for (st.fields) |field| {
                         hasher.update(std.mem.asBytes(&field.offset));
-                        hasher.update(std.mem.asBytes(&field.ident));
                         ctx.hashChild(hasher, field.type);
                     }
                 },
@@ -350,7 +412,7 @@ const TypeSet = struct {
             const bself = Type{ .id = @intCast(b_index) };
 
             switch (a) {
-                .unit, .bool => {},
+                .unit, .type, .bool => {},
                 inline .int, .float => |a_nbytes, tag| {
                     const b_nbytes = @field(b, @tagName(tag));
                     if (a_nbytes != b_nbytes) return false;
@@ -359,6 +421,20 @@ const TypeSet = struct {
                     const bchild = b.option;
                     if (!typeEqlSelf(achild, aself, bchild, bself)) {
                         return false;
+                    }
+                },
+                .function => |afunc| {
+                    const bfunc = b.function;
+                    if (!afunc.returns.eql(bfunc.returns) or
+                        afunc.params.len != bfunc.params.len)
+                    {
+                        return false;
+                    }
+
+                    for (afunc.params, bfunc.params) |aparam, bparam| {
+                        if (!aparam.eql(bparam)) {
+                            return false;
+                        }
                     }
                 },
                 .distinct => |ad| {
@@ -387,7 +463,6 @@ const TypeSet = struct {
 
                     for (ast.fields, bst.fields) |afield, bfield| {
                         if (afield.offset != bfield.offset or
-                            !afield.ident.eql(bfield.ident) or
                             !typeEqlSelf(afield.type, aself, bfield.type, bself))
                         {
                             return false;
@@ -476,11 +551,14 @@ const TypeSet = struct {
             .unit => 0,
             .@"bool" => 1,
             .int, .float => |nbytes| nbytes,
-            // TODO check this
-            .option => |child| self.sizeOf(child),
+            // child value + a byte which contains a validity flag
+            .option => |child| self.sizeOf(child) + 1,
             .distinct => |d| self.sizeOf(d.child),
             .ptr => 8,
             .@"struct" => |st| st.size,
+
+            // unsized
+            .type, .function => 0,
         };
     }
 
@@ -492,11 +570,13 @@ const TypeSet = struct {
             .unit => 0,
             .@"bool" => 1,
             .int, .float => |nbytes| nbytes,
-            // TODO check this
             .option => |child| self.sizeOf(child),
             .distinct => |d| self.alignOf(d.child),
             .ptr => 8,
             .@"struct" => |st| st.alignment,
+
+            // unsized
+            .type, .function => 0,
         };
     }
 
@@ -509,12 +589,85 @@ const TypeSet = struct {
     }
 };
 
+// globals and prelude =========================================================
+
+pub const Builtin = enum {
+    t,
+    f,
+};
+
+pub const Global = union(enum) {
+    type: Type,
+    builtin: Builtin,
+    /// constant bytes
+    bytes: []const u8,
+
+    fn clone(self: Global, ally: Allocator) Allocator.Error!Global {
+        return switch (self) {
+            .type, .builtin => self,
+            .bytes => |bytes| .{ .bytes = try ally.dupe(u8, bytes) },
+        };
+    }
+};
+
+pub const GlobalError = error {NameConflict};
+
+const Globals = struct {
+    const Self = @This();
+
+    const GlobalMeta = struct {
+        type: Type,
+        global: Global,
+    };
+
+    const Map = std.AutoHashMapUnmanaged(Name, GlobalMeta);
+
+    arena: std.heap.ArenaAllocator,
+    map: Map = .{},
+
+    /// provide backing allocator for value arena
+    fn init(backing_ally: Allocator) Self {
+        return .{ .arena = std.heap.ArenaAllocator.init(backing_ally) };
+    }
+
+    fn deinit(self: *Self, ally: Allocator) void {
+        self.map.deinit(ally);
+        self.arena.deinit();
+    }
+
+    /// defines a global and clones its value
+    fn add(self: *Self, ally: Allocator, nm: Name, ty: Type, value: Global,) (GlobalError || Allocator.Error)!void {
+        const res = try self.map.getOrPut(ally, nm);
+        if (res.found_existing) {
+            return GlobalError.NameConflict;
+        }
+
+        res.value_ptr.* = GlobalMeta{
+            .type = ty,
+            .global = try value.clone(self.arena.allocator()),
+        };
+    }
+
+    /// debugging function
+    fn dump(self: Self) void {
+        var entries = self.map.iterator();
+        while (entries.next()) |entry| {
+            std.debug.print("{}: {} = {}\n", .{
+                entry.key_ptr.*,
+                entry.value_ptr.type,
+                entry.value_ptr.global,
+            });
+        }
+    }
+};
+
 // interface ===================================================================
 
 var gpa: std.heap.GeneralPurposeAllocator(.{}) = undefined;
 var strings: Strings = undefined;
 var names: NamePool = undefined;
 var typeset: TypeSet = undefined;
+var globals: Globals = undefined;
 
 pub fn init() void {
     // order matters a lot here, these rely extensively on each other
@@ -524,21 +677,68 @@ pub fn init() void {
     strings = .{};
     names = .{};
     typeset = TypeSet.init(ally);
+    globals = Globals.init(ally);
+
+    initPrelude();
 }
 
 pub fn deinit() void {
     const ally = gpa.allocator();
 
+    globals.deinit(ally);
     typeset.deinit(ally);
     names.deinit(ally);
     strings.deinit(ally);
 }
 
-fn must(x: anytype) @typeInfo(@TypeOf(x)).ErrorUnion.payload {
-    return x catch |e| {
-        std.debug.print("unrecoverable error: {s}", .{@errorName(e)});
-        std.process.exit(1);
+fn initPrelude() void {
+    const Def = struct {
+        name: []const u8,
+        ty: Type,
+        value: Global,
+
+        fn init(nm: []const u8, ty: Type, value: Global) @This() {
+            return .{
+                .name = nm,
+                .ty = ty,
+                .value = value,
+            };
+        }
     };
+
+    const @"type" = types.@"type"();
+    const @"bool" = types.@"bool"();
+
+    const d = Def.init;
+    const defs = [_]Def{
+        d("unit", @"type", .{ .type = types.unit() }),
+        d("bool", @"type", .{ .type = @"bool" }),
+        d("i8", @"type", .{ .type = types.int(1) }),
+        d("i16", @"type", .{ .type = types.int(2) }),
+        d("i32", @"type", .{ .type = types.int(4) }),
+        d("i64", @"type", .{ .type = types.int(8) }),
+        d("f16", @"type", .{ .type = types.float(2) }),
+        d("f32", @"type", .{ .type = types.float(4) }),
+        d("f64", @"type", .{ .type = types.float(8) }),
+        d("t", @"bool", .{ .builtin = .t }),
+        d("f", @"bool", .{ .builtin = .f }),
+    };
+
+    for (defs) |def| {
+        const nm = name(null, string(def.name));
+        must(define(nm, def.ty, def.value));
+    }
+
+    globals.dump();
+}
+
+fn unrecoverable(e: anyerror) noreturn {
+    std.debug.print("unrecoverable error: {s}", .{@errorName(e)});
+    std.process.exit(1);
+}
+
+fn must(x: anytype) @typeInfo(@TypeOf(x)).ErrorUnion.payload {
+    return x catch |e| unrecoverable(e);
 }
 
 /// place a string in the string pool
@@ -561,6 +761,15 @@ pub fn namespace(nm: Name) ?Name {
 /// get the identifier of a name
 pub fn namebase(nm: Name) String {
     return names.get(nm).ident;
+}
+
+/// define a global
+pub fn define(nm: Name, ty: Type, value: Global) GlobalError!void {
+    const ally = gpa.allocator();
+    return globals.add(ally, nm, ty, value) catch |e| switch (e) {
+        GlobalError.NameConflict => @as(GlobalError, @errSetCast(e)),
+        else => |bad_err| unrecoverable(bad_err),
+    };
 }
 
 pub const types = struct {
@@ -597,6 +806,10 @@ pub const types = struct {
 
     pub fn unit() Type {
         return make(null, .unit);
+    }
+
+    pub fn @"type"() Type {
+        return make(null, .type);
     }
 
     pub fn @"bool"() Type {
