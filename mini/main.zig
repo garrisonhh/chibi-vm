@@ -11,7 +11,7 @@ pub fn main() !void {
     defer mini.deinit();
 
     var ast = try parser.parse(ally, "test",
-        \\(this (is) (a (test program)) (0 1 2 -3 1.234))
+        \\(as i32 4)
         \\
     );
     defer ast.deinit();

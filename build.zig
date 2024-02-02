@@ -113,7 +113,7 @@ pub fn build(b: *std.Build) void {
 
     mini_tests.addModule("vm", vm);
 
-    const run_mini_tests = b.addRunArtifact(vm_tests);
+    const run_mini_tests = b.addRunArtifact(mini_tests);
 
     const mini_test_step = b.step("test-mini", "Run mini tests");
     mini_test_step.dependOn(&run_mini_tests.step);

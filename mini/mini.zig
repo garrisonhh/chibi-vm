@@ -6,7 +6,7 @@ const Allocator = std.mem.Allocator;
 // string interning ============================================================
 
 /// an interned string in the string pool
-pub const String = packed struct(u64) {
+pub const String = struct {
     offset: u32,
     len: u32,
 
@@ -14,6 +14,8 @@ pub const String = packed struct(u64) {
         return a.offset == b.offset;
     }
 
+    /// this slice may be invalidated with the next string interned, so make
+    /// sure to use ephemerally (or copy)
     pub fn slice(s: String) []const u8 {
         return strings.mem.items[s.offset .. s.offset + s.len];
     }
@@ -103,6 +105,24 @@ const Strings = struct {
 
 pub const Name = struct {
     id: u32,
+
+    pub fn eql(a: Name, b: Name) bool {
+        return a.id == b.id;
+    }
+
+    pub fn format(
+        self: Name,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        const node = names.get(self);
+
+        if (node.ns) |ns| {
+            try writer.print("{}.", .{ns});
+        }
+        try writer.print("{}", .{node.ident});
+    }
 };
 
 const NamePool = struct {
@@ -114,23 +134,23 @@ const NamePool = struct {
     };
 
     const ScopeContext = struct {
-        pub fn hash(_: @This(), key: Node) u64 {
+        pub fn hash(_: @This(), key: Node) u32 {
             var hasher = std.hash.Wyhash.init(0xDEADBEEF);
             if (key.ns) |ns| hasher.update(std.mem.asBytes(&ns.id));
             hasher.update(std.mem.asBytes(&key.ident));
-            return hasher.final();
+            return @truncate(hasher.final());
         }
 
-        pub fn eql(_: @This(), a: Node, b: Node) bool {
+        pub fn eql(_: @This(), a: Node, b: Node, _: usize) bool {
             return std.meta.eql(a, b);
         }
     };
 
-    const Scope = std.HashMapUnmanaged(
+    const Scope = std.ArrayHashMapUnmanaged(
         Node,
         Name,
         ScopeContext,
-        std.hash_map.default_max_load_percentage,
+        true,
     );
 
     scope: Scope = .{},
@@ -139,22 +159,27 @@ const NamePool = struct {
         self.* = undefined;
     }
 
+    fn get(self: Self, nm: Name) Node {
+        return self.scope.entries.items(.key)[nm.id];
+    }
+
     /// create a name in a namespace
     fn intern(
         self: *Self,
         ally: Allocator,
         /// null for a name in the root namespace
         ns: ?Name,
-        ident: []const u8,
+        ident: String,
     ) Allocator.Error!Name {
         const node = Node{
             .ns = ns,
-            .ident = string(ident),
+            .ident = ident,
         };
 
         const res = try self.scope.getOrPut(ally, node);
         if (!res.found_existing) {
-            const nm = Name{ .id = self.scope.count() };
+            const count: u32 = @intCast(self.scope.count());
+            const nm = Name{ .id = count - 1 };
             res.value_ptr.* = nm;
         }
 
@@ -192,9 +217,19 @@ pub fn string(str: []const u8) String {
 }
 
 /// get/retrieve a name
-pub fn name(ns: ?Name, ident: []const u8) Name {
+pub fn name(ns: ?Name, ident: String) Name {
     const ally = gpa.allocator();
     return names.intern(ally, ns, ident) catch oom();
+}
+
+/// get the namespace of a name
+pub fn namespace(nm: Name) ?Name {
+    return names.get(nm).ns;
+}
+
+/// get the identifier of a name
+pub fn namebase(nm: Name) String {
+    return names.get(nm).ident;
 }
 
 // tests =======================================================================
@@ -212,6 +247,32 @@ test "string interning" {
     try std.testing.expect(!b.eql(c));
 
     try std.testing.expectEqualStrings("hello", a.slice());
-    try std.testing.expectEqualStrings("world", a.slice());
+    try std.testing.expectEqualStrings("world", b.slice());
     try std.testing.expectEqualStrings("hello", c.slice());
+}
+
+test "name interning" {
+    init();
+    defer deinit();
+
+    const a = name(null, string("a"));
+    const b = name(null, string("b"));
+    const c = name(null, string("c"));
+    const bc = name(b, string("c"));
+    const bc2 = name(b, string("c"));
+    const ac = name(a, string("c"));
+
+    try std.testing.expect(!a.eql(b));
+    try std.testing.expect(!b.eql(c));
+    try std.testing.expect(bc.eql(bc2));
+    try std.testing.expect(!ac.eql(bc));
+    try std.testing.expect(if (namespace(bc)) |parent| parent.eql(b) else false);
+    try std.testing.expect(if (namespace(bc2)) |parent| parent.eql(b) else false);
+    try std.testing.expect(if (namespace(ac)) |parent| parent.eql(a) else false);
+
+    try std.testing.expectFmt(
+        "a b c b.c b.c a.c",
+        "{} {} {} {} {} {}",
+        .{ a, b, c, bc, bc2, ac },
+    );
 }
