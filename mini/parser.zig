@@ -8,7 +8,14 @@ pub const SExpr = struct {
     const Self = @This();
     pub const Kind = std.meta.Tag(Data);
 
+    pub const Syntax = enum {
+        def,
+        @"->",
+        lambda,
+    };
+
     pub const Data = union(enum) {
+        syntax: Syntax,
         ident: mini.String,
         int: []const u8,
         float: []const u8,
@@ -23,6 +30,17 @@ pub const SExpr = struct {
         return text[self.span_start .. self.span_start + self.span_len];
     }
 
+    pub fn isSyntax(self: Self, syntax: Syntax) bool {
+        return self.data == .syntax and self.data.syntax == syntax;
+    }
+
+    /// if this sexpr is an application of syntax
+    pub fn isSyntaxApp(self: Self, syntax: Syntax) bool {
+        return self.data == .list and
+            self.data.list.len > 0 and
+            self.data.list[0].isSyntax(syntax);
+    }
+
     pub fn format(
         self: Self,
         comptime _: []const u8,
@@ -30,6 +48,9 @@ pub const SExpr = struct {
         writer: anytype,
     ) @TypeOf(writer).Error!void {
         switch (self.data) {
+            .syntax => |syntax| {
+                try writer.print("{s}", .{@tagName(syntax)});
+            },
             .ident => |str| {
                 try writer.print("<{s}>{}", .{ @tagName(self.data), str });
             },
@@ -110,6 +131,7 @@ pub const Ast = struct {
         start: usize,
         len: usize,
     ) void {
+        std.debug.assert(self.err == null);
         self.err = SyntaxError{
             .kind = kind,
             .start = start,
@@ -186,6 +208,12 @@ fn isFloatWord(word: []const u8) bool {
 fn classify(word: []const u8) ?SExpr.Data {
     std.debug.assert(word.len > 0);
     if (isIdentWord(word)) {
+        for (std.enums.values(SExpr.Syntax)) |syntax| {
+            if (std.mem.eql(u8, word, @tagName(syntax))) {
+                return .{ .syntax = syntax };
+            }
+        }
+
         return .{ .ident = mini.string(word) };
     } else if (isIntWord(word)) {
         return .{ .int = word };
@@ -265,7 +293,7 @@ pub fn parse(ally: Allocator, name: []const u8, text: []const u8) Error!Ast {
         const tok = lexer.next() catch |e| {
             switch (e) {
                 Lexer.Error.InvalidCharacter => {
-                    ast.syntaxError(.invalid_character, lexer.index - 1, 1);
+                    ast.syntaxError(.invalid_character, lexer.index, 1);
                 },
             }
 

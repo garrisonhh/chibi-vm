@@ -1,6 +1,7 @@
 const std = @import("std");
-const parser = @import("parser.zig");
 const mini = @import("mini.zig");
+const parser = @import("parser.zig");
+const sema = @import("sema.zig");
 
 /// useful for displaying errors nicely
 const SourceLoc = struct {
@@ -17,7 +18,7 @@ const SourceLoc = struct {
         len: usize,
     ) SourceLoc {
         const text_start = std.mem.lastIndexOf(u8, source[0..start], "\n") orelse 0;
-        const stop_offset = std.mem.indexOf(u8, source[start + len..], "\n");
+        const stop_offset = std.mem.indexOf(u8, source[start + len ..], "\n");
         const text_stop = if (stop_offset) |offset| start + len + offset else source.len;
         const text = source[text_start..text_stop];
 
@@ -44,7 +45,7 @@ const SourceLoc = struct {
         const meta = std.fmt.bufPrint(&buf, "{d} | ", .{lineno}) catch {
             unreachable;
         };
-        try writer.print("{s}{s}\n", .{meta, loc.text});
+        try writer.print("{s}{s}\n", .{ meta, loc.text });
 
         // highlight
         try writer.writeByteNTimes(' ', meta.len + loc.char_index);
@@ -94,7 +95,7 @@ const SourceLoc = struct {
                 unreachable;
             };
             try writer.writeByteNTimes(' ', meta.len - max_meta_len);
-            try writer.print("{s}{s}\n", .{meta, line});
+            try writer.print("{s}{s}\n", .{ meta, line });
         }
 
         // following arrow
@@ -105,7 +106,7 @@ const SourceLoc = struct {
     fn display(loc: SourceLoc, writer: anytype) @TypeOf(writer).Error!void {
         const lineno = loc.line_index + 1;
         const charno = loc.char_index + 1;
-        try writer.print("[{}:{}:{}]\n", .{loc.name, lineno, charno});
+        try writer.print("[{}:{}:{}]\n", .{ loc.name, lineno, charno });
 
         const multiline = std.mem.count(u8, loc.text, "\n") > 0;
         if (multiline) {
@@ -149,6 +150,26 @@ fn checkSyntaxError(ast: parser.Ast) !void {
     std.process.exit(1);
 }
 
+/// if there is a syntax error, display it to stderr and exit
+fn checkSemanticError(ast: parser.Ast, tir: sema.Tir) !void {
+    const err = tir.err orelse return;
+
+    var buf: [1024]u8 = undefined;
+    const bufPrint = std.fmt.bufPrint;
+
+    const desc: []const u8 = switch (err.meta) {
+        .expected_syntax => |s| try bufPrint(&buf, "expected {s}", .{@tagName(s)}),
+        .invalid_syntax => |s| try bufPrint(&buf, "invalid {s}", .{@tagName(s)}),
+        .expected_type => "expected a type",
+        .unknown_ident => |ident| try bufPrint(&buf, "unknown identifier `{}`", .{ident}),
+    };
+    const loc = SourceLoc.init(ast.name, ast.text, err.start, err.len);
+
+    try miniError(loc, "{s}", .{desc});
+
+    std.process.exit(1);
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -158,23 +179,26 @@ pub fn main() !void {
     defer mini.deinit();
 
     var ast = try parser.parse(ally, "test",
-        \\(as i32
-        \\  (+
-        \\     4
-        \\     5
-        \\     10
-        \\     10
-        \\     10
-        \\     11)
+        \\(def zero i32 0)
+        \\(def add (-> i32 i32 i32)
+        \\  (lambda (a b) (+ a b)))
         \\
     );
     defer ast.deinit();
 
     try checkSyntaxError(ast);
 
+    std.debug.print("[parsed exprs]", .{});
     for (ast.toplevel.items) |expr| {
         std.debug.print("{}\n", .{expr});
     }
+
+    var tir = sema.Tir.init(ally);
+    defer tir.deinit();
+
+    try sema.sema(ally, &tir, ast);
+
+    try checkSemanticError(ast, tir);
 }
 
 // testing =====================================================================

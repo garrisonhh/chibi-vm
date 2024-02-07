@@ -1,8 +1,5 @@
 const std = @import("std");
 
-/// valid word characters (that aren't a digit or alphanumeric)
-const SYMBOLS = "_.+-*/%";
-
 pub const Token = struct {
     pub const Kind = enum {
         lparen,
@@ -31,8 +28,21 @@ fn isSpace(c: u8) bool {
     };
 }
 
+/// valid word characters (that aren't a digit or alphanumeric)
 pub fn isSymbol(c: u8) bool {
-    return std.mem.indexOf(u8, SYMBOLS, &.{c}) != null;
+    return switch (c) {
+        '!'...'\'',
+        '*'...'/',
+        ':'...'@',
+        '\\',
+        '^',
+        '_',
+        '`',
+        '|',
+        '~',
+        => true,
+        else => false,
+    };
 }
 
 fn isWord(c: u8) bool {

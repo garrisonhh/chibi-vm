@@ -1,6 +1,5 @@
 /// global language systems that need to be accessible throughout the lower
 /// stages of compilation
-
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -134,7 +133,7 @@ const NamePool = struct {
         ident: String,
     };
 
-    const ScopeContext = struct {
+    const PoolContext = struct {
         pub fn hash(_: @This(), key: Node) u32 {
             var hasher = std.hash.Wyhash.init(0xDEADBEEF);
             if (key.ns) |ns| hasher.update(std.mem.asBytes(&ns.id));
@@ -147,22 +146,22 @@ const NamePool = struct {
         }
     };
 
-    const Scope = std.ArrayHashMapUnmanaged(
+    const Pool = std.ArrayHashMapUnmanaged(
         Node,
         Name,
-        ScopeContext,
+        PoolContext,
         true,
     );
 
-    scope: Scope = .{},
+    pool: Pool = .{},
 
     fn deinit(self: *Self, ally: Allocator) void {
-        self.scope.deinit(ally);
+        self.pool.deinit(ally);
         self.* = undefined;
     }
 
     fn get(self: Self, nm: Name) Node {
-        return self.scope.entries.items(.key)[nm.id];
+        return self.pool.entries.items(.key)[nm.id];
     }
 
     /// create a name in a namespace
@@ -178,9 +177,9 @@ const NamePool = struct {
             .ident = ident,
         };
 
-        const res = try self.scope.getOrPut(ally, node);
+        const res = try self.pool.getOrPut(ally, node);
         if (!res.found_existing) {
-            const count: u32 = @intCast(self.scope.count());
+            const count: u32 = @intCast(self.pool.count());
             const nm = Name{ .id = count - 1 };
             res.value_ptr.* = nm;
         }
@@ -223,11 +222,15 @@ pub const Type = struct {
             .float => |nbytes| try writer.print("f{d}", .{nbytes * 8}),
             .option => |child| try writer.print("(option {})", .{child}),
             .distinct => |d| try writer.print(
-                "(distinct {d} {})", .{d.distinct_id, d.child},),
-            .ptr => |ptr|
-                try writer.print("(ptr {s} {d} {})", .{@tagName(ptr.kind), ptr.alignment, ptr.child},),
+                "(distinct {d} {})",
+                .{ d.distinct_id, d.child },
+            ),
+            .ptr => |ptr| try writer.print(
+                "(ptr {s} {d} {})",
+                .{ @tagName(ptr.kind), ptr.alignment, ptr.child },
+            ),
             .function => |func| {
-                try writer.writeAll("(func (");
+                try writer.writeAll("(-> ");
                 for (func.params, 0..) |param, i| {
                     if (i > 0) try writer.writeAll(" ");
                     try writer.print("{}", .{param});
@@ -295,7 +298,15 @@ pub const TypeInfo = union(enum) {
 
     fn clone(self: Self, ally: Allocator) Allocator.Error!Self {
         return switch (self) {
-            .unit, .type, .bool, .int, .float, .option, .distinct, .ptr, => self,
+            .unit,
+            .type,
+            .bool,
+            .int,
+            .float,
+            .option,
+            .distinct,
+            .ptr,
+            => self,
 
             .function => |func| Self{ .function = .{
                 .params = try ally.dupe(Type, func.params),
@@ -516,7 +527,12 @@ const TypeSet = struct {
         } });
     }
 
-    fn intern(self: *Self, ally: Allocator, itself: ?Type, meta: TypeInfo,) Allocator.Error!Type {
+    fn intern(
+        self: *Self,
+        ally: Allocator,
+        itself: ?Type,
+        meta: TypeInfo,
+    ) Allocator.Error!Type {
         const ctx = SetContext{
             .metas = self.set.keys(),
             .self = itself,
@@ -549,7 +565,7 @@ const TypeSet = struct {
     fn sizeOf(self: Self, ty: Type) usize {
         return switch (self.get(ty)) {
             .unit => 0,
-            .@"bool" => 1,
+            .bool => 1,
             .int, .float => |nbytes| nbytes,
             // child value + a byte which contains a validity flag
             .option => |child| self.sizeOf(child) + 1,
@@ -558,7 +574,7 @@ const TypeSet = struct {
             .@"struct" => |st| st.size,
 
             // unsized
-            .type, .function => 0,
+            .builtin, .type, .function => 0,
         };
     }
 
@@ -568,7 +584,7 @@ const TypeSet = struct {
     fn alignOf(self: Self, ty: Type) usize {
         return switch (self.get(ty)) {
             .unit => 0,
-            .@"bool" => 1,
+            .bool => 1,
             .int, .float => |nbytes| nbytes,
             .option => |child| self.sizeOf(child),
             .distinct => |d| self.alignOf(d.child),
@@ -576,7 +592,7 @@ const TypeSet = struct {
             .@"struct" => |st| st.alignment,
 
             // unsized
-            .type, .function => 0,
+            .builtin, .type, .function => 0,
         };
     }
 
@@ -591,34 +607,29 @@ const TypeSet = struct {
 
 // globals and prelude =========================================================
 
-pub const Builtin = enum {
-    t,
-    f,
-};
-
 pub const Global = union(enum) {
     type: Type,
-    builtin: Builtin,
     /// constant bytes
     bytes: []const u8,
 
     fn clone(self: Global, ally: Allocator) Allocator.Error!Global {
         return switch (self) {
-            .type, .builtin => self,
+            .type => self,
             .bytes => |bytes| .{ .bytes = try ally.dupe(u8, bytes) },
         };
     }
 };
 
-pub const GlobalError = error {NameConflict};
+pub const GlobalError = error{NameConflict};
+
+pub const GlobalMeta = struct {
+    name: Name,
+    type: Type,
+    global: Global,
+};
 
 const Globals = struct {
     const Self = @This();
-
-    const GlobalMeta = struct {
-        type: Type,
-        global: Global,
-    };
 
     const Map = std.AutoHashMapUnmanaged(Name, GlobalMeta);
 
@@ -636,13 +647,20 @@ const Globals = struct {
     }
 
     /// defines a global and clones its value
-    fn add(self: *Self, ally: Allocator, nm: Name, ty: Type, value: Global,) (GlobalError || Allocator.Error)!void {
+    fn add(
+        self: *Self,
+        ally: Allocator,
+        nm: Name,
+        ty: Type,
+        value: Global,
+    ) (GlobalError || Allocator.Error)!void {
         const res = try self.map.getOrPut(ally, nm);
         if (res.found_existing) {
             return GlobalError.NameConflict;
         }
 
         res.value_ptr.* = GlobalMeta{
+            .name = nm,
             .type = ty,
             .global = try value.clone(self.arena.allocator()),
         };
@@ -659,6 +677,11 @@ const Globals = struct {
             });
         }
     }
+};
+
+/// represents a local scope that can reference the global scope
+pub const Scope = struct {
+    // TODO
 };
 
 // interface ===================================================================
@@ -706,12 +729,11 @@ fn initPrelude() void {
         }
     };
 
-    const @"type" = types.@"type"();
-    const @"bool" = types.@"bool"();
+    const @"type" = types.type();
+    const @"bool" = types.bool();
 
     const d = Def.init;
     const defs = [_]Def{
-        d("unit", @"type", .{ .type = types.unit() }),
         d("bool", @"type", .{ .type = @"bool" }),
         d("i8", @"type", .{ .type = types.int(1) }),
         d("i16", @"type", .{ .type = types.int(2) }),
@@ -720,8 +742,6 @@ fn initPrelude() void {
         d("f16", @"type", .{ .type = types.float(2) }),
         d("f32", @"type", .{ .type = types.float(4) }),
         d("f64", @"type", .{ .type = types.float(8) }),
-        d("t", @"bool", .{ .builtin = .t }),
-        d("f", @"bool", .{ .builtin = .f }),
     };
 
     for (defs) |def| {
@@ -770,6 +790,25 @@ pub fn define(nm: Name, ty: Type, value: Global) GlobalError!void {
         GlobalError.NameConflict => @as(GlobalError, @errSetCast(e)),
         else => |bad_err| unrecoverable(bad_err),
     };
+}
+
+/// retrieve a global
+pub fn get(nm: Name) ?GlobalMeta {
+    return globals.map.get(nm);
+}
+
+/// look up an identifier in a namespace
+pub fn lookup(ns: Name, ident: String) ?GlobalMeta {
+    var trav = ns;
+    while (true) {
+        if (get(name(trav, ident))) |meta| {
+            return meta;
+        }
+
+        trav = namespace(trav) orelse break;
+    }
+
+    return get(name(null, ident));
 }
 
 pub const types = struct {
@@ -843,6 +882,13 @@ pub const types = struct {
             .kind = kind,
             .alignment = aln orelse alignOf(child),
             .child = child,
+        } });
+    }
+
+    pub fn function(params: []const Type, returns: Type) Type {
+        return make(null, .{ .function = .{
+            .params = params,
+            .returns = returns,
         } });
     }
 
@@ -946,13 +992,13 @@ test "primitive types" {
     const unit = types.unit();
     const unit2 = types.unit();
     const distinct_unit = types.distinct(types.unit());
-    const @"bool" = types.@"bool"();
+    const @"bool" = types.bool();
     const @"i32" = types.int(4);
-    const @"i32_2" = types.int(4);
+    const i32_2 = types.int(4);
     const @"f64" = types.float(8);
 
     try std.testing.expectEqual(unit, unit2);
-    try std.testing.expectEqual(@"i32", @"i32_2");
+    try std.testing.expectEqual(@"i32", i32_2);
     try std.testing.expect(!@"i32".eql(unit));
     try std.testing.expect(!distinct_unit.eql(unit));
 
@@ -1001,7 +1047,7 @@ test "self-referential struct" {
     const opt_ptr_listnode = types.option(ptr_listnode);
 
     const resolved = types.@"struct"(listnode, &[_]types.StructField{
-        .{ .ident = string("next"), .type = opt_ptr_listnode  },
+        .{ .ident = string("next"), .type = opt_ptr_listnode },
         .{ .ident = string("data"), .type = types.int(4) },
     });
 
@@ -1010,7 +1056,7 @@ test "self-referential struct" {
     const opt_ptr_listnode2 = types.option(ptr_listnode2);
 
     const resolved2 = types.@"struct"(listnode, &[_]types.StructField{
-        .{ .ident = string("next"), .type = opt_ptr_listnode2  },
+        .{ .ident = string("next"), .type = opt_ptr_listnode2 },
         .{ .ident = string("data"), .type = types.int(4) },
     });
     const distinct_resolved = types.distinct(resolved);
