@@ -75,7 +75,7 @@ test "basic linking" {
     const call_add_unit = try b.build(ally);
     defer call_add_unit.deinit(ally);
 
-    const mod = try vm.link(ally, &.{add_unit, call_add_unit});
+    const mod = try vm.link(ally, &.{ add_unit, call_add_unit });
     defer mod.deinit(ally);
 
     try env.push(i32, 22);

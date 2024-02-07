@@ -262,10 +262,7 @@ pub const Builder = struct {
         while (reloc_iter.next()) |entry| {
             if (entry.value_ptr.items.len == 0) continue;
 
-            try reloc_list.append(Unit.Relocation{
-                .loc = entry.key_ptr.*,
-                .refs = try entry.value_ptr.toOwnedSlice(ally)
-            });
+            try reloc_list.append(Unit.Relocation{ .loc = entry.key_ptr.*, .refs = try entry.value_ptr.toOwnedSlice(ally) });
         }
 
         return Unit{
@@ -487,7 +484,7 @@ pub const Builder = struct {
     }
 };
 
-pub const LinkError = Allocator.Error || error {
+pub const LinkError = Allocator.Error || error{
     ExportAlreadyDefined,
     SymbolNotFound,
 };

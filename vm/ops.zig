@@ -455,7 +455,7 @@ pub const EncodedOp = struct {
                 const U = std.meta.Int(.unsigned, @as(u16, @intCast(size)) * 8);
                 const I = std.meta.Int(.signed, @as(u16, @intCast(size)) * 8);
 
-                const bytes: *const [size]u8  = @ptrCast(self.extra.ptr);
+                const bytes: *const [size]u8 = @ptrCast(self.extra.ptr);
                 const u = std.mem.bytesAsValue(U, bytes).*;
                 const i = std.mem.bytesAsValue(I, bytes).*;
 
@@ -473,7 +473,7 @@ pub const Iterator = struct {
     code: []const u8,
     index: usize = 0,
 
-    pub fn next(iter: *Iterator) ?EncodedOp  {
+    pub fn next(iter: *Iterator) ?EncodedOp {
         if (iter.index == iter.code.len) return null;
 
         const offset = iter.index;
