@@ -40,7 +40,7 @@ pub const Error = error{
 ///
 /// this function must follow the same rules as a typical vm function. internal
 /// errors should be handled by returning them by value into the vm.
-pub const NativeFn = fn(*Env) Error!void;
+pub const NativeFn = fn (*Env) Error!void;
 
 /// encodes env state that only persists during execution of module code
 pub const State = struct {
@@ -270,7 +270,7 @@ fn call(env: *Env, state: *State, dest: u32) Error!void {
 
 // loading and execution =======================================================
 
-pub const ExecError = Allocator.Error || Error || error {
+pub const ExecError = Allocator.Error || Error || error{
     SymbolNotFound,
 };
 

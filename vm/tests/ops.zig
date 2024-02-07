@@ -663,7 +663,7 @@ test "generated" {
         }
     }
 
-    inline for ([_]Width{.short, .half, .word}) |width| {
+    inline for ([_]Width{ .short, .half, .word }) |width| {
         const ns = generic_float_verifiers(width);
         inline for (@typeInfo(ns).Struct.decls) |decl| {
             const function = @field(ns, decl.name);
