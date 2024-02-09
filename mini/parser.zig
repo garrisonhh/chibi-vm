@@ -12,6 +12,9 @@ pub const SExpr = struct {
         def,
         @"->",
         lambda,
+        @"+",
+        @"-",
+        @"*",
     };
 
     pub const Data = union(enum) {

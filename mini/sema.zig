@@ -42,16 +42,16 @@ pub const TExpr = struct {
     const Self = @This();
     pub const Kind = std.meta.Tag(Data);
 
-    // TODO with some kind of function type polymorphism a these could
-    // be represented as normal functions, at least during semantic analysis
-    pub const BuiltinApplicable = enum {
-        add,
-        sub,
-        mul,
-    };
-
     pub const BuiltinApp = struct {
-        builtin: BuiltinApplicable,
+        // TODO with some kind of function type polymorphism a these could
+        // be represented as normal functions, at least during semantic analysis
+        pub const Kind = enum {
+            add,
+            sub,
+            mul,
+        };
+
+        kind: BuiltinApp.Kind,
         args: []const TExpr,
     };
 
@@ -91,7 +91,7 @@ pub const TExpr = struct {
             .unit => try writer.writeAll("()"),
             .int => |n| try writer.print("{}", .{n}),
             .builtin_app => |bapp| {
-                try writer.print("({s}", .{@tagName(bapp.builtin)});
+                try writer.print("({s}", .{@tagName(bapp.kind)});
                 for (bapp.args) |child| {
                     try writer.print(" {}", .{child});
                 }
@@ -108,13 +108,13 @@ pub const TExpr = struct {
             .variable => |variable| {
                 switch (variable) {
                     .param, .value => |index| {
-                        try writer.print("{s}-{d}", .{@tagName(variable), index});
+                        try writer.print("{s}-{d}", .{ @tagName(variable), index });
                     },
                 }
             },
             .reference => |name| {
                 try writer.print("{}", .{name});
-            }
+            },
         }
     }
 };
@@ -133,6 +133,7 @@ pub const Tir = struct {
             expected: Type,
             unknown_ident: mini.String,
             redefinition: Name,
+            not_enough_args,
         };
 
         meta: Meta,
@@ -208,10 +209,6 @@ fn evalType(tir: *Tir, ns: Name, sexpr: SExpr) Error!?Type {
             }
 
             switch (list[0].data.syntax) {
-                .def, .lambda => {
-                    tir.semanticError(sexpr, .{ .expected = mini.types.type() });
-                    return null;
-                },
                 .@"->" => {
                     if (list.len == 1) {
                         tir.semanticError(sexpr, .{ .invalid_syntax = .@"->" });
@@ -231,6 +228,10 @@ fn evalType(tir: *Tir, ns: Name, sexpr: SExpr) Error!?Type {
                     };
 
                     return mini.types.function(params, returns);
+                },
+                else => {
+                    tir.semanticError(sexpr, .{ .expected = mini.types.type() });
+                    return null;
                 },
             }
         },
@@ -416,6 +417,54 @@ const Context = struct {
     }
 };
 
+fn analyzeBuiltinApp(
+    ally: Allocator,
+    tir: *Tir,
+    ctx: *Context,
+    sexpr: SExpr,
+    expected: mini.Type,
+) Error!?TExpr.BuiltinApp {
+    std.debug.assert(sexpr.data == .list);
+    std.debug.assert(sexpr.data.list[0].data == .syntax);
+
+    const meta = mini.types.get(expected);
+    const list = sexpr.data.list;
+
+    const kind: TExpr.BuiltinApp.Kind = switch (list[0].data.syntax) {
+        .@"+" => .add,
+        .@"-" => .sub,
+        .@"*" => .mul,
+        else => unreachable,
+    };
+
+    const args: []const TExpr = switch (kind) {
+        // binary reductions on integer or float
+        .add, .sub, .mul => args: {
+            if (meta != .int and meta != .float) {
+                tir.semanticError(sexpr, .{ .expected = expected });
+                return null;
+            } else if (list.len < 3) {
+                tir.semanticError(sexpr, .not_enough_args);
+                return null;
+            }
+
+            const args = try tir.alloc(TExpr, list.len - 1);
+            for (list[1..], args) |arg_sexpr, *arg| {
+                arg.* = try analyzeExpr(ally, tir, ctx, arg_sexpr, expected) orelse {
+                    return null;
+                };
+            }
+
+            break :args args;
+        },
+    };
+
+    return TExpr.BuiltinApp{
+        .kind = kind,
+        .args = args,
+    };
+}
+
 fn analyzeLambda(
     ally: Allocator,
     tir: *Tir,
@@ -531,7 +580,13 @@ fn analyzeExpr(
                             return null;
                         };
                         break :list .{ .lambda = lambda };
-                    }
+                    },
+                    .@"+", .@"-", .@"*" => {
+                        const bapp = try analyzeBuiltinApp(ally, tir, ctx, sexpr, expected) orelse {
+                            return null;
+                        };
+                        break :list .{ .builtin_app = bapp };
+                    },
                 }
             } else {
                 // must be an actual list
@@ -578,7 +633,7 @@ pub fn sema(ally: Allocator, tir: *Tir, ast: Ast) Error!void {
     std.debug.print("[first pass of {}]\n", .{ast.name});
     var decls = fp.decls.valueIterator();
     while (decls.next()) |decl| {
-        std.debug.print("{}: {} = {}\n", .{ decl.name, decl.type, decl.body });
+        std.debug.print("{}: {}\n", .{ decl.name, decl.type });
     }
     std.debug.print("\n", .{});
 

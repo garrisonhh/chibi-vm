@@ -163,6 +163,7 @@ fn checkSemanticError(ast: parser.Ast, tir: sema.Tir) !void {
         .expected => |ty| try bufPrint(&buf, "expected a {}", .{ty}),
         .unknown_ident => |ident| try bufPrint(&buf, "unknown identifier `{}`", .{ident}),
         .redefinition => |name| try bufPrint(&buf, "`{}` is already defined", .{name}),
+        .not_enough_args => "not enough arguments",
     };
     const loc = SourceLoc.init(ast.name, ast.text, err.start, err.len);
 
@@ -185,6 +186,7 @@ pub fn main() !void {
         \\(def zero_fn (-> i32) (lambda () 0))
         \\(def zero_global_fn (-> i32) (lambda () zero))
         \\(def id_fn (-> i32 i32) (lambda (a) a))
+        \\(def add (-> i32 i32 i32) (lambda (a b) (+ a b)))
         \\
     );
     defer ast.deinit();
