@@ -404,6 +404,7 @@ const monomorphic_subs = struct {
     }
 
     fn label(env: *Env, state: *State) Error!void {
+        // TODO why shouldn't this push from the 'code' offset
         const dest = state.readValue(u32);
         try env.push(u32, dest);
     }

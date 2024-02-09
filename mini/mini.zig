@@ -155,13 +155,39 @@ const NamePool = struct {
 
     pool: Pool = .{},
 
+    string_arena: std.heap.ArenaAllocator,
+    strings: std.AutoHashMapUnmanaged(Name, []const u8) = .{},
+
+    fn init(backing_ally: Allocator) Self {
+        return Self{
+            .string_arena = std.heap.ArenaAllocator.init(backing_ally),
+        };
+    }
+
     fn deinit(self: *Self, ally: Allocator) void {
         self.pool.deinit(ally);
+        self.strings.deinit(ally);
+        self.string_arena.deinit();
         self.* = undefined;
     }
 
     fn get(self: Self, nm: Name) Node {
         return self.pool.entries.items(.key)[nm.id];
+    }
+
+    fn getString(
+        self: *Self,
+        ally: Allocator,
+        nm: Name,
+    ) Allocator.Error![]const u8 {
+        const res = try self.strings.getOrPut(ally, nm);
+        if (!res.found_existing) {
+            const arena_ally = self.string_arena.allocator();
+            const name_str = try std.fmt.allocPrint(arena_ally, "{}", .{nm});
+            res.value_ptr.* = name_str;
+        }
+
+        return res.value_ptr.*;
     }
 
     /// create a name in a namespace
@@ -574,7 +600,7 @@ const TypeSet = struct {
             .@"struct" => |st| st.size,
 
             // unsized
-            .builtin, .type, .function => 0,
+            .type, .function => 0,
         };
     }
 
@@ -592,7 +618,7 @@ const TypeSet = struct {
             .@"struct" => |st| st.alignment,
 
             // unsized
-            .builtin, .type, .function => 0,
+            .type, .function => 0,
         };
     }
 
@@ -686,7 +712,7 @@ pub fn init() void {
     const ally = gpa.allocator();
 
     strings = .{};
-    names = .{};
+    names = NamePool.init(ally);
     typeset = TypeSet.init(ally);
     globals = Globals.init(ally);
 
@@ -767,6 +793,11 @@ pub fn namespace(nm: Name) ?Name {
 /// get the identifier of a name
 pub fn namebase(nm: Name) String {
     return names.get(nm).ident;
+}
+
+pub fn namestring(nm: Name) []const u8 {
+    const ally = gpa.allocator();
+    return must(names.getString(ally, nm));
 }
 
 /// define a global

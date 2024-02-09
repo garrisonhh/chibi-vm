@@ -1,7 +1,9 @@
 const std = @import("std");
+const vm = @import("vm");
 const mini = @import("mini.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
+const codegen = @import("codegen.zig");
 
 /// useful for displaying errors nicely
 const SourceLoc = struct {
@@ -180,13 +182,10 @@ pub fn main() !void {
     mini.init();
     defer mini.deinit();
 
+    // parse
     var ast = try parser.parse(ally, "test",
-        \\(def unit () ())
-        \\(def zero i32 0)
-        \\(def zero_fn (-> i32) (lambda () 0))
-        \\(def zero_global_fn (-> i32) (lambda () zero))
-        \\(def id_fn (-> i32 i32) (lambda (a) a))
-        \\(def add (-> i32 i32 i32) (lambda (a b) (+ a b)))
+        \\(def one i32 1)
+        \\(def f (-> i32 i32 i32) (lambda (a b) (+ a b one)))
         \\
     );
     defer ast.deinit();
@@ -199,12 +198,65 @@ pub fn main() !void {
     }
     std.debug.print("\n", .{});
 
+    // analyze
     var tir = sema.Tir.init(ally);
     defer tir.deinit(ally);
 
     try sema.sema(ally, &tir, ast);
 
     try checkSemanticError(ast, tir);
+
+    // generate code
+    var units = std.ArrayList(vm.Unit).init(ally);
+    defer {
+        for (units.items) |unit| unit.deinit(ally);
+        units.deinit();
+    }
+
+    var decls = tir.decls.iterator();
+    while (decls.next()) |entry| {
+        const unit = try codegen.codegen(ally, entry.key_ptr.*, entry.value_ptr.*);
+        try units.append(unit);
+    }
+
+    const module = try vm.link(ally, units.items);
+    defer module.deinit(ally);
+
+    std.debug.print("DATA {}\n", .{std.fmt.fmtSliceHexLower(module.data)});
+    std.debug.print("CODE {}\n", .{std.fmt.fmtSliceHexLower(module.code)});
+
+    std.debug.print("[compiled]\n", .{});
+    var code_iter = vm.iterate(module.code);
+    while (code_iter.next()) |eop| {
+        std.debug.print("{d: >6} | {s}", .{eop.offset, @tagName(eop.byteop.opcode)});
+
+        if (eop.byteop.opcode.meta().sized) {
+            std.debug.print(" {s}", .{@tagName(eop.byteop.width)});
+        }
+
+        if (eop.extra.len > 0) {
+            if (eop.byteop.opcode == .local) {
+                std.debug.print(" {d}", .{std.mem.readIntSliceNative(i16, eop.extra)});
+            } else {
+                std.debug.print(" 0x{}", .{std.fmt.fmtSliceHexLower(eop.extra)});
+            }
+        }
+
+        std.debug.print("\n", .{});
+    }
+
+    // execute
+    var env = try vm.Env.init(ally, .{});
+    defer env.deinit(ally);
+
+    var state = try vm.Env.load(ally, module);
+    defer state.deinit(ally);
+
+    try env.push(i32, 42);
+    try env.push(i32, 24);
+    try env.exec(&state, "test.f");
+    const res = try env.pop(i32);
+    std.debug.print("result: {}\n", .{res});
 }
 
 // testing =====================================================================

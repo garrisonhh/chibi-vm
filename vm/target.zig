@@ -455,7 +455,7 @@ pub const Builder = struct {
         try self.code.appendSlice(ally, extra.slice());
     }
 
-    /// sugar for pushing a function parameter to the stack
+    /// sugar for pushing a function parameter address to the stack
     pub fn param(self: *Self, index: usize) Allocator.Error!void {
         const frame_size: i16 = @intCast(Env.Frame.aligned_size);
         const param_offset: i16 = 8 * (1 + @as(i16, @intCast(index)));
