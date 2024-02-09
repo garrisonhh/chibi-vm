@@ -217,7 +217,8 @@ pub const Type = struct {
     ) @TypeOf(writer).Error!void {
         const info = types.get(ty);
         switch (info) {
-            .unit, .type, .bool => try writer.writeAll(@tagName(info)),
+            .unit => try writer.writeAll("()"),
+            .type, .bool => try writer.writeAll(@tagName(info)),
             .int => |nbytes| try writer.print("i{d}", .{nbytes * 8}),
             .float => |nbytes| try writer.print("f{d}", .{nbytes * 8}),
             .option => |child| try writer.print("(option {})", .{child}),

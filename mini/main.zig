@@ -160,8 +160,9 @@ fn checkSemanticError(ast: parser.Ast, tir: sema.Tir) !void {
     const desc: []const u8 = switch (err.meta) {
         .expected_syntax => |s| try bufPrint(&buf, "expected {s}", .{@tagName(s)}),
         .invalid_syntax => |s| try bufPrint(&buf, "invalid {s}", .{@tagName(s)}),
-        .expected_type => "expected a type",
+        .expected => |ty| try bufPrint(&buf, "expected a {}", .{ty}),
         .unknown_ident => |ident| try bufPrint(&buf, "unknown identifier `{}`", .{ident}),
+        .redefinition => |name| try bufPrint(&buf, "`{}` is already defined", .{name}),
     };
     const loc = SourceLoc.init(ast.name, ast.text, err.start, err.len);
 
@@ -179,22 +180,22 @@ pub fn main() !void {
     defer mini.deinit();
 
     var ast = try parser.parse(ally, "test",
+        \\(def unit () ())
         \\(def zero i32 0)
-        \\(def add (-> i32 i32 i32)
-        \\  (lambda (a b) (+ a b)))
         \\
     );
     defer ast.deinit();
 
     try checkSyntaxError(ast);
 
-    std.debug.print("[parsed exprs]", .{});
+    std.debug.print("[parsed exprs]\n", .{});
     for (ast.toplevel.items) |expr| {
         std.debug.print("{}\n", .{expr});
     }
+    std.debug.print("\n", .{});
 
     var tir = sema.Tir.init(ally);
-    defer tir.deinit();
+    defer tir.deinit(ally);
 
     try sema.sema(ally, &tir, ast);
 
