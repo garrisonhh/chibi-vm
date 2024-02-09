@@ -182,6 +182,9 @@ pub fn main() !void {
     var ast = try parser.parse(ally, "test",
         \\(def unit () ())
         \\(def zero i32 0)
+        \\(def zero_fn (-> i32) (lambda () 0))
+        \\(def zero_global_fn (-> i32) (lambda () zero))
+        \\(def id_fn (-> i32 i32) (lambda (a) a))
         \\
     );
     defer ast.deinit();

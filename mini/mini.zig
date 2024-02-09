@@ -232,11 +232,10 @@ pub const Type = struct {
             ),
             .function => |func| {
                 try writer.writeAll("(-> ");
-                for (func.params, 0..) |param, i| {
-                    if (i > 0) try writer.writeAll(" ");
-                    try writer.print("{}", .{param});
+                for (func.params) |param| {
+                    try writer.print("{} ", .{param});
                 }
-                try writer.print(" {})", .{func.returns});
+                try writer.print("{})", .{func.returns});
             },
             .@"struct" => |st| {
                 try writer.writeAll("(struct");

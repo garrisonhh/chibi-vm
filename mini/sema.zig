@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const mini = @import("mini.zig");
+const String = mini.String;
 const Name = mini.Name;
 const Type = mini.Type;
 const parser = @import("parser.zig");
@@ -41,23 +42,39 @@ pub const TExpr = struct {
     const Self = @This();
     pub const Kind = std.meta.Tag(Data);
 
-    // TODO with some kind of function type polymorphism a lot of these could
+    // TODO with some kind of function type polymorphism a these could
     // be represented as normal functions, at least during semantic analysis
-    pub const Builtin = enum {
+    pub const BuiltinApplicable = enum {
         add,
         sub,
         mul,
     };
 
     pub const BuiltinApp = struct {
-        builtin: Builtin,
+        builtin: BuiltinApplicable,
         args: []const TExpr,
+    };
+
+    pub const Lambda = struct {
+        /// a reference to a parameter, function temporary or stack value
+        pub const Variable = union(enum) {
+            param: u32,
+            value: u32,
+        };
+
+        params: []const String,
+        body: *const TExpr,
+        /// values potentially referenced by variables within this lambda
+        values: []const Type,
     };
 
     pub const Data = union(enum) {
         unit,
         int: i64,
         builtin_app: BuiltinApp,
+        lambda: Lambda,
+        variable: Lambda.Variable,
+        reference: Name,
     };
 
     type: Type,
@@ -80,6 +97,24 @@ pub const TExpr = struct {
                 }
                 try writer.writeAll(")");
             },
+            .lambda => |lambda| {
+                try writer.writeAll("(lambda (");
+                for (lambda.params, 0..) |param, i| {
+                    if (i > 0) try writer.writeAll(" ");
+                    try writer.print("{}", .{param});
+                }
+                try writer.print(") {})", .{lambda.body});
+            },
+            .variable => |variable| {
+                switch (variable) {
+                    .param, .value => |index| {
+                        try writer.print("{s}-{d}", .{@tagName(variable), index});
+                    },
+                }
+            },
+            .reference => |name| {
+                try writer.print("{}", .{name});
+            }
         }
     }
 };
@@ -120,6 +155,16 @@ pub const Tir = struct {
     pub fn deinit(self: *Self, ally: Allocator) void {
         self.decls.deinit(ally);
         self.arena.deinit();
+    }
+
+    fn alloc(self: *Self, comptime T: type, count: usize) Allocator.Error![]T {
+        const arena_ally = self.arena.allocator();
+        return arena_ally.alloc(T, count);
+    }
+
+    fn create(self: *Self, comptime T: type) Allocator.Error!*T {
+        const arena_ally = self.arena.allocator();
+        return arena_ally.create(T);
     }
 
     fn semanticError(self: *Self, sexpr: SExpr, meta: SemanticError.Meta) void {
@@ -239,35 +284,210 @@ fn firstPass(ally: Allocator, tir: *Tir, fp: *FirstPass, ast: Ast) Error!void {
 
 // second pass =================================================================
 
+/// symbol table for the current function. mini does not support closures so
+/// this is all of the symbols sema needs
+const FunctionSymbols = struct {
+    const Self = @This();
+
+    vars: std.ArrayListUnmanaged(Type) = .{},
+    params: []const Type,
+
+    table: std.AutoArrayHashMapUnmanaged(String, TExpr.Lambda.Variable) = .{},
+    /// indices of currently accessible scopes within the table
+    scopes: std.ArrayListUnmanaged(usize) = .{},
+
+    fn init(
+        ally: Allocator,
+        param_names: []const String,
+        param_types: []const Type,
+    ) Allocator.Error!Self {
+        var self = Self{
+            .params = try ally.dupe(Type, param_types),
+        };
+
+        for (param_names, 0..) |name, i| {
+            try self.table.put(ally, name, .{ .param = @intCast(i) });
+        }
+
+        return self;
+    }
+
+    fn deinit(self: *Self, ally: Allocator) void {
+        self.scopes.deinit(ally);
+        self.table.deinit(ally);
+        self.vars.deinit(ally);
+        ally.free(self.params);
+    }
+
+    const PutError = Allocator.Error || error{NameConflict};
+
+    // TODO enter and exit for let blocks
+
+    /// create a variable in the function
+    fn put(
+        self: Self,
+        ally: Allocator,
+        ident: String,
+        var_type: Type,
+    ) PutError!TExpr.Lambda.Variable {
+        const res = try self.table.getOrPut(ally, ident);
+        if (res.found_existing) {
+            return PutError.NameConflict;
+        }
+
+        const variable = TExpr.Lambda.Variable{
+            .value = @intCast(self.vars.items.len),
+        };
+        try self.vars.append(ally, var_type);
+
+        res.value_ptr.* = variable;
+
+        return variable;
+    }
+
+    /// retrieve the name for an identifer
+    fn get(self: Self, ident: String) ?TExpr.Lambda.Variable {
+        return self.table.get(ident);
+    }
+};
+
+const Context = struct {
+    ally: Allocator,
+    /// contains module-specific names
+    fp: *const FirstPass,
+    st: ?FunctionSymbols = null,
+
+    fn init(ally: Allocator, fp: *const FirstPass) Context {
+        return Context{
+            .ally = ally,
+            .fp = fp,
+        };
+    }
+
+    fn deinit(ctx: *Context) void {
+        std.debug.assert(ctx.st == null);
+    }
+
+    fn enterFunction(
+        ctx: *Context,
+        param_names: []const String,
+        param_types: []const Type,
+    ) Allocator.Error!void {
+        std.debug.assert(ctx.st == null);
+        ctx.st = try FunctionSymbols.init(ctx.ally, param_names, param_types);
+    }
+
+    fn exitFunction(ctx: *Context) void {
+        std.debug.assert(ctx.st != null);
+        ctx.st.?.deinit(ctx.ally);
+        ctx.st = null;
+    }
+
+    /// copy variable values from the function symbol table for building a
+    /// TExpr.Lambda
+    fn getFunctionValues(
+        ctx: Context,
+        ally: Allocator,
+    ) Allocator.Error![]const Type {
+        std.debug.assert(ctx.st != null);
+        return ally.dupe(Type, ctx.st.?.vars.items);
+    }
+
+    const Lookup = union(enum) {
+        name: Name,
+        variable: TExpr.Lambda.Variable,
+    };
+
+    /// attempt to find an identifier in all of the relevant scopes
+    fn lookup(ctx: Context, ident: String) ?Lookup {
+        if (ctx.st) |st| {
+            if (st.get(ident)) |variable| {
+                return .{ .variable = variable };
+            }
+        }
+
+        if (ctx.fp.decls.get(mini.name(ctx.fp.root, ident))) |fp_decl| {
+            return .{ .name = fp_decl.name };
+        } else if (mini.lookup(ctx.fp.root, ident)) |global| {
+            return .{ .name = global.name };
+        }
+
+        return null;
+    }
+};
+
 fn analyzeLambda(
     ally: Allocator,
     tir: *Tir,
-    fp: *const FirstPass,
+    ctx: *Context,
     sexpr: SExpr,
-    expected: Type,
-) Error!?TExpr {
-    _ = ally;
-    _ = tir;
-    _ = fp;
-    _ = sexpr;
-    _ = expected;
-    @panic("TODO");
+    meta: mini.TypeInfo,
+) Error!?TExpr.Lambda {
+    std.debug.assert(sexpr.isSyntaxApp(.lambda));
+    std.debug.assert(meta == .function);
+
+    const list = sexpr.data.list;
+    if (list.len != 3) {
+        tir.semanticError(sexpr, .{ .invalid_syntax = .lambda });
+        return null;
+    }
+
+    // params
+    const params_sexpr = list[1];
+    if (params_sexpr.data != .list) {
+        tir.semanticError(sexpr, .{ .invalid_syntax = .lambda });
+        return null;
+    }
+
+    const params = try tir.alloc(String, params_sexpr.data.list.len);
+    for (params_sexpr.data.list, params) |param_sexpr, *param| {
+        if (param_sexpr.data != .ident) {
+            tir.semanticError(sexpr, .{ .invalid_syntax = .lambda });
+            return null;
+        }
+
+        param.* = param_sexpr.data.ident;
+    }
+
+    // body with funciton scope
+    try ctx.enterFunction(params, meta.function.params);
+    defer ctx.exitFunction();
+
+    const return_type = meta.function.returns;
+    const body = try tir.create(TExpr);
+    body.* = try analyzeExpr(ally, tir, ctx, list[2], return_type) orelse {
+        return null;
+    };
+
+    const values = try ctx.getFunctionValues(tir.arena.allocator());
+
+    return TExpr.Lambda{
+        .params = params,
+        .body = body,
+        .values = values,
+    };
 }
 
 fn analyzeExpr(
     ally: Allocator,
     tir: *Tir,
-    fp: *const FirstPass,
+    ctx: *Context,
     sexpr: SExpr,
     expected: Type,
 ) Error!?TExpr {
-    _ = ally;
-    _ = fp;
-
-    const arena_ally = tir.arena.allocator();
-    _ = arena_ally;
     const meta = mini.types.get(expected);
     const data: TExpr.Data = switch (sexpr.data) {
+        .ident => |ident| ident: {
+            const lookup = ctx.lookup(ident) orelse {
+                tir.semanticError(sexpr, .{ .unknown_ident = ident });
+                return null;
+            };
+
+            break :ident switch (lookup) {
+                .name => |name| .{ .reference = name },
+                .variable => |variable| .{ .variable = variable },
+            };
+        },
         .int => |literal| int: {
             if (meta != .int) {
                 tir.semanticError(sexpr, .{ .expected = expected });
@@ -301,7 +521,18 @@ fn analyzeExpr(
                 break :list .unit;
             } else if (list[0].data == .syntax) {
                 // syntactic form
-                @panic("TODO syntax");
+                switch (list[0].data.syntax) {
+                    .def, .@"->" => {
+                        tir.semanticError(sexpr, .{ .expected = expected });
+                        return null;
+                    },
+                    .lambda => {
+                        const lambda = try analyzeLambda(ally, tir, ctx, sexpr, meta) orelse {
+                            return null;
+                        };
+                        break :list .{ .lambda = lambda };
+                    }
+                }
             } else {
                 // must be an actual list
                 @panic("TODO list types + analyzing them");
@@ -321,9 +552,12 @@ fn secondPass(
     tir: *Tir,
     fp: *const FirstPass,
 ) Error!void {
+    var ctx = Context.init(ally, fp);
+    defer ctx.deinit();
+
     var decls = fp.decls.valueIterator();
     while (decls.next()) |decl| {
-        const texpr = try analyzeExpr(ally, tir, fp, decl.body.*, decl.type) orelse {
+        const texpr = try analyzeExpr(ally, tir, &ctx, decl.body.*, decl.type) orelse {
             return;
         };
 
