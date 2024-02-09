@@ -103,9 +103,23 @@ fn token(lexer: Lexer, kind: Token.Kind, len: usize) Token {
 }
 
 pub fn next(lexer: *Lexer) Error!?Token {
-    // skip spaces
-    while (true) {
+    // skip spaces and comments
+    skip: while (true) {
         const ch = try lexer.peek() orelse break;
+
+        // skip comments
+        if (ch == '#') {
+            lexer.advance();
+            while (try lexer.peek()) |pk| {
+                lexer.advance();
+                if (pk == '\n') {
+                    break;
+                }
+            }
+
+            continue :skip;
+        }
+
         if (!isSpace(ch)) break;
         lexer.advance();
     }
