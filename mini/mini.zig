@@ -665,18 +665,6 @@ const Globals = struct {
             .global = try value.clone(self.arena.allocator()),
         };
     }
-
-    /// debugging function
-    fn dump(self: Self) void {
-        var entries = self.map.iterator();
-        while (entries.next()) |entry| {
-            std.debug.print("{}: {} = {}\n", .{
-                entry.key_ptr.*,
-                entry.value_ptr.type,
-                entry.value_ptr.global,
-            });
-        }
-    }
 };
 
 /// represents a local scope that can reference the global scope
@@ -748,8 +736,6 @@ fn initPrelude() void {
         const nm = name(null, string(def.name));
         must(define(nm, def.ty, def.value));
     }
-
-    globals.dump();
 }
 
 fn unrecoverable(e: anyerror) noreturn {
