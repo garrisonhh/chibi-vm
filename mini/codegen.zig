@@ -133,11 +133,13 @@ fn lowerValue(b: *Builder, ctx: *Context, expr: TExpr) Error!void {
                         .add => .{ .add = width },
                         .sub => .{ .sub = width },
                         .mul => .{ .muli = width },
+                        else => unreachable,
                     },
                     .float => switch (kind) {
                         .add => .{ .addf = width },
                         .sub => .{ .subf = width },
                         .mul => .{ .mulf = width },
+                        else => unreachable,
                     },
                     else => unreachable,
                 };
@@ -146,6 +148,17 @@ fn lowerValue(b: *Builder, ctx: *Context, expr: TExpr) Error!void {
                     try b.op(op);
                 }
             },
+
+            .eq => {
+                std.debug.assert(bapp.args.len == 2);
+                try lowerValue(b, ctx, bapp.args[0]);
+                try lowerValue(b, ctx, bapp.args[1]);
+
+                const size = mini.types.sizeOf(bapp.args[0].type);
+                const width = vm.Width.fromBytesExact(size).?;
+                try b.op(.{ .eq = width });
+            },
+            .gt, .lt => @panic("TODO codegen gt lt"),
         },
         .@"if" => |meta| {
             const when_false = try b.backref();

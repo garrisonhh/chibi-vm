@@ -165,7 +165,9 @@ fn checkSemanticError(ast: parser.Ast, tir: sema.Tir) !void {
         .expected => |ty| try bufPrint(&buf, "expected a {}", .{ty}),
         .unknown_ident => |ident| try bufPrint(&buf, "unknown identifier `{}`", .{ident}),
         .redefinition => |name| try bufPrint(&buf, "`{}` is already defined", .{name}),
-        .not_enough_args => "not enough arguments",
+        .wrong_argument_count => "wrong argument count",
+        .undeducable_type => "impossible to deduce the type of this expression",
+        .invalid_operator => |ty| try bufPrint(&buf, "invalid operator for {}", .{ty}),
     };
     const loc = SourceLoc.init(ast.name, ast.text, err.start, err.len);
 
@@ -184,8 +186,8 @@ pub fn main() !void {
 
     // parse
     var ast = try parser.parse(ally, "test",
-        \\(def f (-> i32) (lambda ()
-        \\  (if true 1 0)))
+        \\(def f (-> i32 bool) (lambda (x)
+        \\  (= x 2)))
         \\
     );
     defer ast.deinit();
@@ -253,9 +255,14 @@ pub fn main() !void {
     var state = try vm.Env.load(ally, module);
     defer state.deinit(ally);
 
-    try env.exec(&state, "test.f");
-    const res = try env.pop(i32);
-    std.debug.print("result: {}\n", .{res});
+    const func = "test.f";
+
+    for ([_]i32{ 1, 2, 3 }) |in| {
+        try env.push(i32, in);
+        try env.exec(&state, func);
+        const res = try env.pop(bool);
+        std.debug.print("({s} {}) = {}\n", .{ func, in, res });
+    }
 }
 
 // testing =====================================================================

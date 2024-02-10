@@ -14,10 +14,16 @@ pub const SExpr = struct {
         def,
         lambda,
         @"if",
+
         @"->",
+
         @"+",
         @"-",
         @"*",
+
+        @">",
+        @"<",
+        @"=",
     };
 
     pub const Data = union(enum) {

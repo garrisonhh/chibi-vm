@@ -49,6 +49,9 @@ pub const TExpr = struct {
             add,
             sub,
             mul,
+            gt,
+            lt,
+            eq,
         };
 
         kind: BuiltinApp.Kind,
@@ -143,13 +146,16 @@ pub const Tir = struct {
 
     pub const SemanticError = struct {
         pub const Meta = union(enum) {
+
             // TODO move syntax errors back to their homeland
             expected_syntax: SExpr.Syntax,
             invalid_syntax: SExpr.Syntax,
             expected: Type,
             unknown_ident: mini.String,
             redefinition: Name,
-            not_enough_args,
+            wrong_argument_count,
+            undeducable_type,
+            invalid_operator: Type,
         };
 
         meta: Meta,
@@ -373,6 +379,13 @@ const FunctionSymbols = struct {
     fn get(self: Self, ident: String) ?TExpr.Lambda.Variable {
         return self.table.get(ident);
     }
+
+    fn typeOf(self: Self, v: TExpr.Lambda.Variable) Type {
+        return switch (v) {
+            .param => |i| self.params[i],
+            .value => |i| self.vars.items[i],
+        };
+    }
 };
 
 const Context = struct {
@@ -417,28 +430,134 @@ const Context = struct {
         return ally.dupe(Type, ctx.st.?.vars.items);
     }
 
-    const Lookup = union(enum) {
-        name: Name,
-        variable: TExpr.Lambda.Variable,
+    const Lookup = struct {
+        const Location = union(enum) {
+            name: Name,
+            variable: TExpr.Lambda.Variable,
+        };
+
+        type: Type,
+        loc: Location,
     };
 
     /// attempt to find an identifier in all of the relevant scopes
     fn lookup(ctx: Context, ident: String) ?Lookup {
         if (ctx.st) |st| {
             if (st.get(ident)) |variable| {
-                return .{ .variable = variable };
+                return Lookup{
+                    .type = st.typeOf(variable),
+                    .loc = .{ .variable = variable },
+                };
             }
         }
 
         if (ctx.fp.decls.get(mini.name(ctx.fp.root, ident))) |fp_decl| {
-            return .{ .name = fp_decl.name };
+            return Lookup{
+                .type = fp_decl.type,
+                .loc = .{ .name = fp_decl.name },
+            };
         } else if (mini.lookup(ctx.fp.root, ident)) |global| {
-            return .{ .name = global.name };
+            return Lookup{
+                .type = global.type,
+                .loc = .{ .name = global.name },
+            };
         }
 
         return null;
     }
 };
+
+/// attempts to deduce the type of a sexpr. if it's not possible this will
+/// return null, but will not generate an error to allow for fallback
+fn deduceType(tir: *Tir, ctx: *const Context, sexpr: SExpr) Error!?Type {
+    return switch (sexpr.data) {
+        // number literals need more info to deduce their type
+        .int, .float => null,
+        .ident => |ident| if (ctx.lookup(ident)) |lookup| lookup.type else null,
+        .syntax => |syntax| switch (syntax) {
+            .true, .false => mini.types.bool(),
+            else => null,
+        },
+        .list => |list| list: {
+            if (list.len == 0) {
+                break :list mini.types.unit();
+            }
+
+            const head = list[0];
+            if (head.data == .syntax) {
+                break :list switch (head.data.syntax) {
+                    .@"->" => mini.types.type(),
+                    .@">", .@"<", .@"=" => mini.types.bool(),
+
+                    .@"+",
+                    .@"-",
+                    .@"*",
+                    => try deducePeerType(tir, ctx, list[1..]),
+
+                    // TODO this will be fragile until I check syntax arity in
+                    // the parser
+                    .@"if" => try deducePeerType(tir, ctx, list[2..]),
+
+                    .true,
+                    .false,
+                    .def,
+                    .lambda,
+                    => null,
+                };
+            } else if (head.data == .ident) {
+                // get return type of a function
+                const lookup = ctx.lookup(head.data.ident) orelse {
+                    break :list null;
+                };
+
+                const meta = mini.types.get(lookup.type);
+                if (meta != .function) {
+                    break :list null;
+                }
+
+                break :list meta.function.returns;
+            }
+
+            break :list null;
+        },
+    };
+}
+
+/// attempt to deduce the type of an s-expression whose type is based on
+/// multiple children resolving to the same type. this applies for lists, binary
+/// operators, etc.
+fn deducePeerType(
+    tir: *Tir,
+    ctx: *const Context,
+    sexprs: []const SExpr,
+) Error!?Type {
+    for (sexprs) |sexpr| {
+        if (try deduceType(tir, ctx, sexpr)) |deduced| {
+            return deduced;
+        }
+    }
+
+    return null;
+}
+
+/// analyze a number of s-expressions with the same expected type, returning
+/// them as a list allocated on the tir arena
+fn analyzeAll(
+    ally: Allocator,
+    tir: *Tir,
+    ctx: *Context,
+    sexprs: []const SExpr,
+    expected: Type,
+) Allocator.Error!?[]const TExpr {
+    const analyzed = try tir.alloc(TExpr, sexprs.len);
+    for (sexprs, analyzed) |sexpr, *slot| {
+        slot.* = try analyzeExpr(ally, tir, ctx, sexpr, expected) orelse {
+            return null;
+        };
+    }
+
+    return analyzed;
+}
 
 fn analyzeBuiltinApp(
     ally: Allocator,
@@ -457,6 +576,9 @@ fn analyzeBuiltinApp(
         .@"+" => .add,
         .@"-" => .sub,
         .@"*" => .mul,
+        .@">" => .gt,
+        .@"<" => .lt,
+        .@"=" => .eq,
         else => unreachable,
     };
 
@@ -467,19 +589,46 @@ fn analyzeBuiltinApp(
                 tir.semanticError(sexpr, .{ .expected = expected });
                 return null;
             } else if (list.len < 3) {
-                tir.semanticError(sexpr, .not_enough_args);
+                tir.semanticError(sexpr, .wrong_argument_count);
                 return null;
             }
 
-            const args = try tir.alloc(TExpr, list.len - 1);
-            for (list[1..], args) |arg_sexpr, *arg| {
-                arg.* = try analyzeExpr(ally, tir, ctx, arg_sexpr, expected) orelse {
-                    return null;
-                };
+            break :args try analyzeAll(ally, tir, ctx, list[1..], expected) orelse {
+                return null;
+            };
+        },
+
+        // equality
+        .eq => args: {
+            if (meta != .bool) {
+                tir.semanticError(sexpr, .{ .expected = expected });
+                return null;
+            } else if (list.len != 3) {
+                tir.semanticError(sexpr, .wrong_argument_count);
+                return null;
             }
 
-            break :args args;
+            const child_type = try deducePeerType(tir, ctx, list[1..]) orelse {
+                tir.semanticError(list[1], .undeducable_type);
+                return null;
+            };
+
+            const comparable = switch (mini.types.get(child_type)) {
+                .unit, .int, .float, .ptr => true,
+                else => false,
+            };
+            if (!comparable) {
+                tir.semanticError(sexpr, .{ .invalid_operator = child_type });
+                return null;
+            }
+
+            break :args try analyzeAll(ally, tir, ctx, list[1..], child_type) orelse {
+                return null;
+            };
         },
+
+        // comparisons on int or float
+        .gt, .lt => @panic("TODO gt and lt"),
     };
 
     return TExpr.BuiltinApp{
@@ -554,7 +703,7 @@ fn analyzeIf(
         return null;
     }
 
-    const cond = try analyzeExpr(ally, tir, ctx, list[1], mini.types.@"bool"()) orelse {
+    const cond = try analyzeExpr(ally, tir, ctx, list[1], mini.types.bool()) orelse {
         return null;
     };
     const when_true = try analyzeExpr(ally, tir, ctx, list[2], expected) orelse {
@@ -586,7 +735,12 @@ fn analyzeExpr(
                 return null;
             };
 
-            break :ident switch (lookup) {
+            if (!lookup.type.eql(expected)) {
+                tir.semanticError(sexpr, .{ .expected = expected });
+                return null;
+            }
+
+            break :ident switch (lookup.loc) {
                 .name => |name| .{ .reference = name },
                 .variable => |variable| .{ .variable = variable },
             };
@@ -658,7 +812,7 @@ fn analyzeExpr(
                         };
                         break :list .{ .@"if" = @"if" };
                     },
-                    .@"+", .@"-", .@"*" => {
+                    .@"+", .@"-", .@"*", .@">", .@"<", .@"=" => {
                         const bapp = try analyzeBuiltinApp(ally, tir, ctx, sexpr, expected) orelse {
                             return null;
                         };
