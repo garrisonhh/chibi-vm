@@ -187,13 +187,10 @@ pub fn main() !void {
 
     // parse
     var ast = try parser.parse(ally, "test",
-        \\(def one i32 1)
-        \\
-        \\(def f (-> i32 bool) (lambda (x)
-        \\  (g x)))
-        \\
-        \\(def g (-> i32 bool) (lambda (x)
-        \\  (> x one)))
+        \\(def f (-> i32 i32) (lambda (x)
+        \\  (if (> x 1)
+        \\    (+ (f (- x 1)) (f (- x 2)))
+        \\    1)))
         \\
     );
     defer ast.deinit();
@@ -263,10 +260,10 @@ pub fn main() !void {
 
     const func = "test.f";
 
-    for ([_]i32{ 1, 2, 3 }) |in| {
-        try env.push(i32, in);
+    for (0..10) |in| {
+        try env.push(i32, @as(i32, @intCast(in)));
         try env.exec(&state, func);
-        const res = try env.pop(bool);
+        const res = try env.pop(i32);
         std.debug.print("({s} {}) = {}\n", .{ func, in, res });
     }
 }
