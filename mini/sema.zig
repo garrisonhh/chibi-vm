@@ -81,6 +81,7 @@ pub const TExpr = struct {
         unit,
         bool: bool,
         int: i64,
+        app: []const TExpr,
         builtin_app: BuiltinApp,
         reference: Name,
         variable: Lambda.Variable,
@@ -102,6 +103,14 @@ pub const TExpr = struct {
             .unit => try writer.writeAll("()"),
             .bool => |b| try writer.print("{}", .{b}),
             .int => |n| try writer.print("{}", .{n}),
+            .app => |app| {
+                try writer.writeAll("(");
+                for (app, 0..) |child, i| {
+                    if (i > 0) try writer.writeAll(" ");
+                    try writer.print("{}", .{child});
+                }
+                try writer.writeAll(")");
+            },
             .builtin_app => |bapp| {
                 try writer.print("({s}", .{@tagName(bapp.kind)});
                 for (bapp.args) |child| {
@@ -153,9 +162,10 @@ pub const Tir = struct {
             expected: Type,
             unknown_ident: mini.String,
             redefinition: Name,
+            invalid_operator: Type,
             wrong_argument_count,
             undeducable_type,
-            invalid_operator: Type,
+            expected_function,
         };
 
         meta: Meta,
@@ -468,10 +478,10 @@ const Context = struct {
 };
 
 /// attempts to deduce the type of a sexpr. if it's not possible this will
-/// return null, but will not generate an error to allow for fallback
+/// return null, but will not generate an error to allow the caller to fallback
+/// or produce an error with better context
 fn deduceType(tir: *Tir, ctx: *const Context, sexpr: SExpr) Error!?Type {
     return switch (sexpr.data) {
-        // number literals need more info to deduce their type
         .int, .float => null,
         .ident => |ident| if (ctx.lookup(ident)) |lookup| lookup.type else null,
         .syntax => |syntax| switch (syntax) {
@@ -790,9 +800,12 @@ fn analyzeExpr(
                 }
 
                 break :list .unit;
-            } else if (list[0].data == .syntax) {
+            }
+
+            const head = list[0];
+            if (head.data == .syntax) {
                 // syntactic form
-                switch (list[0].data.syntax) {
+                switch (head.data.syntax) {
                     .def, .@"->", .true, .false => {
                         tir.semanticError(sexpr, .{ .expected = expected });
                         return null;
@@ -817,8 +830,34 @@ fn analyzeExpr(
                     },
                 }
             } else {
-                // must be an actual list
-                @panic("TODO list types + analyzing them");
+                // call
+                const func_type = try deduceType(tir, ctx, head) orelse {
+                    tir.semanticError(sexpr, .undeducable_type);
+                    return null;
+                };
+                const func_meta = mini.types.get(func_type);
+                if (func_meta != .function) {
+                    tir.semanticError(sexpr, .expected_function);
+                    return null;
+                }
+
+                const func = try analyzeExpr(ally, tir, ctx, head, func_type) orelse {
+                    return null;
+                };
+                if (list.len - 1 != func_meta.function.params.len) {
+                    tir.semanticError(sexpr, .wrong_argument_count);
+                    return null;
+                }
+
+                const app = try tir.alloc(TExpr, list.len);
+                app[0] = func;
+                for (list[1..], app[1..], func_meta.function.params) |param_sexpr, *slot, param_type| {
+                    slot.* = try analyzeExpr(ally, tir, ctx, param_sexpr, param_type) orelse {
+                        return null;
+                    };
+                }
+
+                break :list .{ .app = app };
             }
         },
         inline else => |_, tag| @panic("TODO analyze " ++ @tagName(tag)),

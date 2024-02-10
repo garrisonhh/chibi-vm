@@ -165,9 +165,10 @@ fn checkSemanticError(ast: parser.Ast, tir: sema.Tir) !void {
         .expected => |ty| try bufPrint(&buf, "expected a {}", .{ty}),
         .unknown_ident => |ident| try bufPrint(&buf, "unknown identifier `{}`", .{ident}),
         .redefinition => |name| try bufPrint(&buf, "`{}` is already defined", .{name}),
+        .invalid_operator => |ty| try bufPrint(&buf, "invalid operator for {}", .{ty}),
         .wrong_argument_count => "wrong argument count",
         .undeducable_type => "impossible to deduce the type of this expression",
-        .invalid_operator => |ty| try bufPrint(&buf, "invalid operator for {}", .{ty}),
+        .expected_function => "expected a function",
     };
     const loc = SourceLoc.init(ast.name, ast.text, err.start, err.len);
 
@@ -186,8 +187,13 @@ pub fn main() !void {
 
     // parse
     var ast = try parser.parse(ally, "test",
+        \\(def one i32 1)
+        \\
         \\(def f (-> i32 bool) (lambda (x)
-        \\  (> x 1)))
+        \\  (g x)))
+        \\
+        \\(def g (-> i32 bool) (lambda (x)
+        \\  (> x one)))
         \\
     );
     defer ast.deinit();

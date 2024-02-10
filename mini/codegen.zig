@@ -119,6 +119,14 @@ fn lowerValue(b: *Builder, ctx: *Context, expr: TExpr) Error!void {
                 .offset = 0,
             } });
         },
+        .app => |app| {
+            for (app[1..]) |arg| {
+                try lowerValue(b, ctx, arg);
+            }
+
+            try lowerAddr(b, ctx, app[0]);
+            try b.op(.call);
+        },
         .builtin_app => |bapp| switch (bapp.kind) {
             // binary math reductions
             .add, .sub, .mul => |kind| {
