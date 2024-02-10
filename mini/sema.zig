@@ -598,8 +598,8 @@ fn analyzeBuiltinApp(
             };
         },
 
-        // equality
-        .eq => args: {
+        // comparisons
+        .eq, .gt, .lt => args: {
             if (meta != .bool) {
                 tir.semanticError(sexpr, .{ .expected = expected });
                 return null;
@@ -626,9 +626,6 @@ fn analyzeBuiltinApp(
                 return null;
             };
         },
-
-        // comparisons on int or float
-        .gt, .lt => @panic("TODO gt and lt"),
     };
 
     return TExpr.BuiltinApp{

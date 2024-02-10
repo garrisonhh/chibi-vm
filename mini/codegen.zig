@@ -158,7 +158,27 @@ fn lowerValue(b: *Builder, ctx: *Context, expr: TExpr) Error!void {
                 const width = vm.Width.fromBytesExact(size).?;
                 try b.op(.{ .eq = width });
             },
-            .gt, .lt => @panic("TODO codegen gt lt"),
+            .gt, .lt => |kind| {
+                std.debug.assert(bapp.args.len == 2);
+                try lowerValue(b, ctx, bapp.args[0]);
+                try lowerValue(b, ctx, bapp.args[1]);
+
+                const size = mini.types.sizeOf(bapp.args[0].type);
+                const width = vm.Width.fromBytesExact(size).?;
+                const signed = mini.types.get(bapp.args[0].type) == .int;
+
+                const op: vm.Op = if (signed) switch (kind) {
+                    .gt => .{ .gti = width },
+                    .lt => .{ .gti = width },
+                    else => unreachable,
+                } else switch (kind) {
+                    .gt => .{ .gtu = width },
+                    .lt => .{ .gtu = width },
+                    else => unreachable,
+                };
+
+                try b.op(op);
+            },
         },
         .@"if" => |meta| {
             const when_false = try b.backref();

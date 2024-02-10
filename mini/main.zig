@@ -187,7 +187,7 @@ pub fn main() !void {
     // parse
     var ast = try parser.parse(ally, "test",
         \\(def f (-> i32 bool) (lambda (x)
-        \\  (= x 2)))
+        \\  (> x 1)))
         \\
     );
     defer ast.deinit();
