@@ -9,9 +9,9 @@ demonstrate the capabilities of the vm well.
 - [x] parse, typecheck, lower, and execute code
 - [x] function calls
 - [ ] type system with proper systems language features
-  - [x] proper alignment and sizing
   - [x] basic primitives (unit, bool, ints, floats)
-  - [ ] pointers
+  - [x] proper alignment and sizing
+  - [ ] pointers and arrays
   - [ ] structured types
 - [ ] structured control flow
 - [ ] fleshed-out math and logic

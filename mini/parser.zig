@@ -9,9 +9,12 @@ pub const SExpr = struct {
     pub const Kind = std.meta.Tag(Data);
 
     pub const Syntax = enum {
+        true,
+        false,
         def,
-        @"->",
         lambda,
+        @"if",
+        @"->",
         @"+",
         @"-",
         @"*",

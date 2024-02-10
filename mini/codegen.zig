@@ -95,6 +95,9 @@ fn lowerValue(b: *Builder, ctx: *Context, expr: TExpr) Error!void {
         .unit => {
             try b.constant(u64, undefined);
         },
+        .bool => |val| {
+            try b.constant(bool, val);
+        },
         .int => |n| switch (mini.types.get(expr.type).int) {
             inline 1, 2, 4, 8 => |nbytes| {
                 const I = std.meta.Int(.signed, nbytes * 8);
@@ -103,6 +106,10 @@ fn lowerValue(b: *Builder, ctx: *Context, expr: TExpr) Error!void {
             else => unreachable,
         },
         .variable, .reference => {
+            // TODO wide types? I think sema will guard against them being
+            // generated and assignment will copy by address, but there are
+            // weird cases like function calls with structs passed by value? idk
+            // maybe I'm overthinking it, maybe it needs more thought
             const size = mini.types.sizeOf(expr.type);
             const width = vm.Width.fromBytesFit(size).?;
 
@@ -110,7 +117,7 @@ fn lowerValue(b: *Builder, ctx: *Context, expr: TExpr) Error!void {
             try b.op(.{ .load = .{
                 .width = width,
                 .offset = 0,
-            }});
+            } });
         },
         .builtin_app => |bapp| switch (bapp.kind) {
             // binary math reductions
@@ -139,6 +146,27 @@ fn lowerValue(b: *Builder, ctx: *Context, expr: TExpr) Error!void {
                     try b.op(op);
                 }
             },
+        },
+        .@"if" => |meta| {
+            const when_false = try b.backref();
+            const end = try b.backref();
+
+            // condition
+            try lowerValue(b, ctx, meta.cond.*);
+            try b.op(.{ .jz = .{
+                .width = .byte,
+                .dest = when_false,
+            } });
+
+            // when true
+            try lowerValue(b, ctx, meta.when_true.*);
+            try b.op(.{ .jump = end });
+
+            // when false
+            b.resolve(when_false);
+            try lowerValue(b, ctx, meta.when_false.*);
+
+            b.resolve(end);
         },
 
         else => std.debug.panic("TODO lower {s}", .{@tagName(expr.data)}),
@@ -179,7 +207,7 @@ pub fn codegen(ally: Allocator, name: Name, expr: TExpr) Error!vm.Unit {
             bytesFromExpr(bytes, expr);
 
             _ = try b.data(bytes);
-        }
+        },
     }
 
     return try b.build(ally);

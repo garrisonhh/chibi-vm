@@ -184,8 +184,8 @@ pub fn main() !void {
 
     // parse
     var ast = try parser.parse(ally, "test",
-        \\(def one i32 1)
-        \\(def f (-> i32 i32 i32) (lambda (a b) (+ a b one)))
+        \\(def f (-> i32) (lambda ()
+        \\  (if true 1 0)))
         \\
     );
     defer ast.deinit();
@@ -228,7 +228,7 @@ pub fn main() !void {
     std.debug.print("[compiled]\n", .{});
     var code_iter = vm.iterate(module.code);
     while (code_iter.next()) |eop| {
-        std.debug.print("{d: >6} | {s}", .{eop.offset, @tagName(eop.byteop.opcode)});
+        std.debug.print("{d: >6} | {s}", .{ eop.offset, @tagName(eop.byteop.opcode) });
 
         if (eop.byteop.opcode.meta().sized) {
             std.debug.print(" {s}", .{@tagName(eop.byteop.width)});
@@ -244,6 +244,7 @@ pub fn main() !void {
 
         std.debug.print("\n", .{});
     }
+    std.debug.print("\n", .{});
 
     // execute
     var env = try vm.Env.init(ally, .{});
@@ -252,8 +253,6 @@ pub fn main() !void {
     var state = try vm.Env.load(ally, module);
     defer state.deinit(ally);
 
-    try env.push(i32, 42);
-    try env.push(i32, 24);
     try env.exec(&state, "test.f");
     const res = try env.pop(i32);
     std.debug.print("result: {}\n", .{res});

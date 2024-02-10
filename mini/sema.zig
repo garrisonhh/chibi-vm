@@ -68,13 +68,21 @@ pub const TExpr = struct {
         values: []const Type,
     };
 
+    pub const If = struct {
+        cond: *const TExpr,
+        when_true: *const TExpr,
+        when_false: *const TExpr,
+    };
+
     pub const Data = union(enum) {
         unit,
+        bool: bool,
         int: i64,
         builtin_app: BuiltinApp,
-        lambda: Lambda,
-        variable: Lambda.Variable,
         reference: Name,
+        variable: Lambda.Variable,
+        lambda: Lambda,
+        @"if": If,
     };
 
     type: Type,
@@ -89,6 +97,7 @@ pub const TExpr = struct {
         try writer.print("<{}>", .{self.type});
         switch (self.data) {
             .unit => try writer.writeAll("()"),
+            .bool => |b| try writer.print("{}", .{b}),
             .int => |n| try writer.print("{}", .{n}),
             .builtin_app => |bapp| {
                 try writer.print("({s}", .{@tagName(bapp.kind)});
@@ -104,6 +113,13 @@ pub const TExpr = struct {
                     try writer.print("{}", .{param});
                 }
                 try writer.print(") {})", .{lambda.body});
+            },
+            .@"if" => |meta| {
+                try writer.print("(if {} {} {})", .{
+                    meta.cond,
+                    meta.when_true,
+                    meta.when_false,
+                });
             },
             .variable => |variable| {
                 switch (variable) {
@@ -166,6 +182,13 @@ pub const Tir = struct {
     fn create(self: *Self, comptime T: type) Allocator.Error!*T {
         const arena_ally = self.arena.allocator();
         return arena_ally.create(T);
+    }
+
+    /// create a ptr and write to it
+    fn box(self: *Self, comptime T: type, value: T) Allocator.Error!*T {
+        const ptr = try self.create(T);
+        ptr.* = value;
+        return ptr;
     }
 
     fn semanticError(self: *Self, sexpr: SExpr, meta: SemanticError.Meta) void {
@@ -503,8 +526,7 @@ fn analyzeLambda(
     defer ctx.exitFunction();
 
     const return_type = meta.function.returns;
-    const body = try tir.create(TExpr);
-    body.* = try analyzeExpr(ally, tir, ctx, list[2], return_type) orelse {
+    const body = try analyzeExpr(ally, tir, ctx, list[2], return_type) orelse {
         return null;
     };
 
@@ -512,8 +534,40 @@ fn analyzeLambda(
 
     return TExpr.Lambda{
         .params = params,
-        .body = body,
+        .body = try tir.box(TExpr, body),
         .values = values,
+    };
+}
+
+fn analyzeIf(
+    ally: Allocator,
+    tir: *Tir,
+    ctx: *Context,
+    sexpr: SExpr,
+    expected: Type,
+) Error!?TExpr.If {
+    std.debug.assert(sexpr.isSyntaxApp(.@"if"));
+
+    const list = sexpr.data.list;
+    if (list.len != 4) {
+        tir.semanticError(sexpr, .{ .invalid_syntax = .@"if" });
+        return null;
+    }
+
+    const cond = try analyzeExpr(ally, tir, ctx, list[1], mini.types.@"bool"()) orelse {
+        return null;
+    };
+    const when_true = try analyzeExpr(ally, tir, ctx, list[2], expected) orelse {
+        return null;
+    };
+    const when_false = try analyzeExpr(ally, tir, ctx, list[3], expected) orelse {
+        return null;
+    };
+
+    return TExpr.If{
+        .cond = try tir.box(TExpr, cond),
+        .when_true = try tir.box(TExpr, when_true),
+        .when_false = try tir.box(TExpr, when_false),
     };
 }
 
@@ -559,6 +613,23 @@ fn analyzeExpr(
 
             break :int .{ .int = n };
         },
+        .syntax => |syntax| switch (syntax) {
+            // values that are syntax
+            .true, .false => bools: {
+                if (meta != .bool) {
+                    tir.semanticError(sexpr, .{ .expected = expected });
+                    return null;
+                }
+
+                break :bools .{ .bool = syntax == .true };
+            },
+
+            // everything else should be an application
+            else => {
+                tir.semanticError(sexpr, .{ .expected = expected });
+                return null;
+            },
+        },
         .list => |list| list: {
             if (list.len == 0) {
                 // unit
@@ -571,7 +642,7 @@ fn analyzeExpr(
             } else if (list[0].data == .syntax) {
                 // syntactic form
                 switch (list[0].data.syntax) {
-                    .def, .@"->" => {
+                    .def, .@"->", .true, .false => {
                         tir.semanticError(sexpr, .{ .expected = expected });
                         return null;
                     },
@@ -580,6 +651,12 @@ fn analyzeExpr(
                             return null;
                         };
                         break :list .{ .lambda = lambda };
+                    },
+                    .@"if" => {
+                        const @"if" = try analyzeIf(ally, tir, ctx, sexpr, expected) orelse {
+                            return null;
+                        };
+                        break :list .{ .@"if" = @"if" };
                     },
                     .@"+", .@"-", .@"*" => {
                         const bapp = try analyzeBuiltinApp(ally, tir, ctx, sexpr, expected) orelse {
