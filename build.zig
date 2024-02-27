@@ -41,28 +41,48 @@ pub fn build(b: *std.Build) void {
         .source_file = .{ .path = "vm/main.zig" },
     });
 
-    // exe
-    const exe = b.addExecutable(.{
+    // cc
+    const cc = b.addExecutable(.{
         .name = "chibi-vm",
         .root_source_file = .{ .path = "cc/main.zig" },
         .target = target,
         .optimize = optimize,
     });
 
-    exe.linkLibC();
-    exe.addCSourceFiles(&chibi.c_sources, chibi.cFlags(optimize));
-    exe.addModule("chibi", chibi_mod);
-    exe.addModule("vm", vm);
+    cc.linkLibC();
+    cc.addCSourceFiles(&chibi.c_sources, chibi.cFlags(optimize));
+    cc.addModule("chibi", chibi_mod);
+    cc.addModule("vm", vm);
 
-    b.installArtifact(exe);
+    b.installArtifact(cc);
 
-    // run
-    const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    // run cc
+    const run_cc_cmd = b.addRunArtifact(cc);
+    run_cc_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| run_cc_cmd.addArgs(args);
 
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
+    const run_cc_step = b.step("run-cc", "Run chibi cc");
+    run_cc_step.dependOn(&run_cc_cmd.step);
+
+    // cc2
+    const cc2 = b.addExecutable(.{
+        .name = "cc2",
+        .root_source_file = .{ .path = "cc2/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+
+    cc2.addModule("vm", vm);
+
+    b.installArtifact(cc2);
+
+    // run cc2
+    const run_cc2_cmd = b.addRunArtifact(cc2);
+    run_cc2_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| run_cc2_cmd.addArgs(args);
+
+    const run_cc2_step = b.step("run-cc2", "Run cc2");
+    run_cc2_step.dependOn(&run_cc2_cmd.step);
 
     // vm tests
     const unit_tests = b.addTest(.{
