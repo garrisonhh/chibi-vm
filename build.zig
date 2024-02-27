@@ -2,15 +2,15 @@ const std = @import("std");
 
 const chibi = struct {
     const c_sources = [_][]const u8{
-        "chibi/codegen.c",
-        "chibi/hashmap.c",
-        "chibi/main.c",
-        "chibi/parse.c",
-        "chibi/preprocess.c",
-        "chibi/strings.c",
-        "chibi/tokenize.c",
-        "chibi/type.c",
-        "chibi/unicode.c",
+        "cc/chibi/codegen.c",
+        "cc/chibi/hashmap.c",
+        "cc/chibi/main.c",
+        "cc/chibi/parse.c",
+        "cc/chibi/preprocess.c",
+        "cc/chibi/strings.c",
+        "cc/chibi/tokenize.c",
+        "cc/chibi/type.c",
+        "cc/chibi/unicode.c",
     };
 
     fn cFlags(optimize: std.builtin.Mode) []const []const u8 {
@@ -35,7 +35,7 @@ pub fn build(b: *std.Build) void {
 
     // modules
     const chibi_mod = b.addModule("chibi", .{
-        .source_file = .{ .path = "chibi/chibi.zig" },
+        .source_file = .{ .path = "cc/chibi/chibi.zig" },
     });
     const vm = b.addModule("vm", .{
         .source_file = .{ .path = "vm/main.zig" },

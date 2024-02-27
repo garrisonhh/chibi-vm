@@ -64,15 +64,15 @@ be run with `zig build test`, and can be found in the source code itself.
 
 ## project structure
 
-`chibi` contains the chibicc source which I have left untouched. only the parser
-and source file mechanics are relevant to this project.
-
 `cc` contains the c frontend, which is a thin wrapper over chibi that then
 traverses the AST to generate vm code. since it's not the main product of this
 project, this code is untested and not particularly well-vetted.
 
-`vm` contains the virtual machine, and definitions for opcodes, translation
-units, etc. this code is well tested and commented.
+`cc/chibi` contains the chibicc source which I have left untouched. only the parser
+and source file mechanics are relevant to this project.
 
 `tests` contains the c test suite. `runtests.py` will run a manually filtered
 subset of this suite.
+
+`vm` contains the virtual machine, and definitions for opcodes, translation
+units, etc. this code is well tested and commented.
