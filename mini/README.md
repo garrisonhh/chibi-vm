@@ -7,7 +7,10 @@ demonstrate the capabilities of the vm well.
 ## goals
 
 - [x] parse, typecheck, lower, and execute code
-- [x] function calls
+- [ ] control flow
+  - [x] function calls
+  - [x] if/else statements
+  - [ ] higher-level functions
 - [ ] type system with proper systems language features
   - [x] basic primitives (unit, bool, ints, floats)
   - [x] proper alignment and sizing
