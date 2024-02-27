@@ -693,11 +693,6 @@ const Globals = struct {
     }
 };
 
-/// represents a local scope that can reference the global scope
-pub const Scope = struct {
-    // TODO
-};
-
 // interface ===================================================================
 
 var gpa: std.heap.GeneralPurposeAllocator(.{}) = undefined;
