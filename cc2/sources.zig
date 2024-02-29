@@ -4,7 +4,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
-pub const Source = enum (u16) { _ };
+pub const Source = enum(u16) { _ };
 
 pub const File = struct {
     filename: []const u8,
@@ -48,7 +48,7 @@ const ally = gpa.allocator();
 var map = SourceMap{};
 
 pub fn deinit() void {
-    for (map.values())  |f| {
+    for (map.values()) |f| {
         ally.free(f.filename);
         ally.free(f.text);
     }

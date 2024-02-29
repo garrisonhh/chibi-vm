@@ -2,8 +2,11 @@ const std = @import("std");
 const stderr = std.io.getStdErr().writer();
 const Allocator = std.mem.Allocator;
 const argz = @import("argz.zig");
+const errors = @import("errors.zig");
+const ErrorBuffer = errors.ErrorBuffer;
 const sources = @import("sources.zig");
-const Lexer = @import("Lexer.zig");
+const Source = sources.Source;
+const pp = @import("preprocess.zig");
 
 const CliOptions = enum {
     run,
@@ -24,11 +27,8 @@ const cli = Cli.command("cc", "a c interpreter.", .{ .subcommands = &.{
     } }),
 } });
 
-/// initialize compiler
-fn init() !void {
-}
+fn init() !void {}
 
-/// deinitialize compiler
 fn deinit() void {
     sources.deinit();
 }
@@ -37,20 +37,33 @@ fn run(ally: Allocator, args: []const Cli.Arg) !void {
     try init();
     defer deinit();
 
-    _ = ally;
+    var eb = ErrorBuffer.init(ally);
+    defer eb.deinit();
+    var files = std.ArrayList(Source).init(ally);
+    defer files.deinit();
 
+    // handle args
     for (args) |arg| {
         switch (arg.id) {
             .source_file => {
                 const src = try sources.addPath(arg.data.?);
-
-                var lexer = Lexer.init(src);
-                while (try lexer.next()) |token| {
-                    std.debug.print("{} `{s}`\n", .{token, token.slice()});
-                }
+                try files.append(src);
             },
             else => unreachable,
         }
+    }
+
+    // compile
+    for (files.items) |src| {
+        const tokens = try pp.preprocess(ally, &eb, src) orelse {
+            std.debug.assert(eb.hasErrors());
+
+            try eb.display(stderr);
+            std.process.exit(1);
+        };
+        defer ally.free(tokens);
+
+        // TODO parse
     }
 }
 
