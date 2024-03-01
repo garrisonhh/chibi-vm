@@ -64,7 +64,7 @@ fn run(ally: Allocator, args: []const Cli.Arg) !void {
         defer ally.free(tokens);
 
         for (tokens) |token| {
-            std.debug.print("{} `{s}`\n", .{token, token.slice()});
+            std.debug.print("{} `{s}`\n", .{ token, token.slice() });
         }
 
         // TODO parse

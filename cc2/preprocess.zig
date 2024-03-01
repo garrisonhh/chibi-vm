@@ -68,10 +68,7 @@ const Directive = union(enum) {
     include: Token,
 };
 
-fn parseDirective(
-    eb: *ErrorBuffer,
-    line: []const Token,
-) Allocator.Error!?Directive {
+fn parseDirective(eb: *ErrorBuffer, line: []const Token) Allocator.Error!?Directive {
     var iter = TokenSliceIterator{ .slice = line };
 
     const hash = iter.next() orelse unreachable;
@@ -93,6 +90,10 @@ fn parseDirective(
                 },
             };
         },
+        .@"error" => {
+            try eb.add(dir_tok.loc, .error_directive);
+            return null;
+        },
         else => {
             try eb.add(dir_tok.loc, .unsupported_preprocessor_directive);
             return null;
@@ -110,14 +111,14 @@ fn parseDirective(
 /// attempt to load an included file
 fn loadInclude(ctx: *Context, eb: *ErrorBuffer, tok: Token) Allocator.Error!?Source {
     const inc_path_slice = tok.slice();
-    const inc_filename = inc_path_slice[1..inc_path_slice.len - 1];
+    const inc_filename = inc_path_slice[1 .. inc_path_slice.len - 1];
 
     switch (tok.tag) {
         .string_lit => {
             const src_path = tok.loc.source.get().filename;
             const wd = std.fs.path.dirname(src_path) orelse "";
 
-            const inc_path = try std.fs.path.join(ctx.ally, &.{wd, inc_filename});
+            const inc_path = try std.fs.path.join(ctx.ally, &.{ wd, inc_filename });
             defer ctx.ally.free(inc_path);
 
             // TODO search system include dirs
@@ -140,11 +141,7 @@ fn loadInclude(ctx: *Context, eb: *ErrorBuffer, tok: Token) Allocator.Error!?Sou
     }
 }
 
-fn execDirective(
-    ctx: *Context,
-    eb: *ErrorBuffer,
-    directive: Directive
-) Allocator.Error!void {
+fn execDirective(ctx: *Context, eb: *ErrorBuffer, directive: Directive) Allocator.Error!void {
     switch (directive) {
         .include => |path_tok| {
             const inc_src = try loadInclude(ctx, eb, path_tok) orelse return;
@@ -153,11 +150,7 @@ fn execDirective(
     }
 }
 
-fn preprocessLine(
-    ctx: *Context,
-    eb: *ErrorBuffer,
-    line: []const Token,
-) Allocator.Error!void {
+fn preprocessLine(ctx: *Context, eb: *ErrorBuffer, line: []const Token) Allocator.Error!void {
     if (line.len == 0) {
         return;
     } else if (line[0].tag == .hash) {
@@ -172,11 +165,7 @@ fn preprocessLine(
 }
 
 /// create compiler error from lexer error
-fn diagnoseLexer(
-    eb: *ErrorBuffer,
-    lexer: Lexer,
-    e: Lexer.Error,
-) Allocator.Error!void {
+fn diagnoseLexer(eb: *ErrorBuffer, lexer: Lexer, e: Lexer.Error) Allocator.Error!void {
     const kind: errors.Error.Kind = switch (e) {
         Lexer.Error.InvalidInput => .invalid_character,
         Lexer.Error.UnfinishedString => .unfinished_string,
@@ -185,11 +174,7 @@ fn diagnoseLexer(
     try eb.add(lexer.loc, kind);
 }
 
-fn preprocessInner(
-    ctx: *Context,
-    eb: *ErrorBuffer,
-    src: Source,
-) Allocator.Error!void {
+fn preprocessInner(ctx: *Context, eb: *ErrorBuffer, src: Source) Allocator.Error!void {
     var line_index: usize = 0;
     var line_buf = std.ArrayListUnmanaged(Token){};
     defer line_buf.deinit(ctx.ally);
@@ -217,11 +202,7 @@ fn preprocessInner(
 
 /// lexes and preprocesses a source. returns null when errors are created and
 /// the caller needs to halt and wave a finger at the programmer.
-pub fn preprocess(
-    ally: Allocator,
-    eb: *ErrorBuffer,
-    src: Source,
-) Allocator.Error!?[]const Token {
+pub fn preprocess(ally: Allocator, eb: *ErrorBuffer, src: Source) Allocator.Error!?[]const Token {
     var ctx = Context.init(ally);
     defer ctx.deinit();
 

@@ -16,6 +16,7 @@ pub const Error = struct {
         expected_include_path,
         included_self,
         included_file_not_found,
+        error_directive,
     };
 
     loc: Loc,

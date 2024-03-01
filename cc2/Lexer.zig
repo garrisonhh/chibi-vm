@@ -47,6 +47,7 @@ const c_keywords = [_]Token.Tag{
 
 const pp_keywords = [_]Token.Tag{
     .include,
+    .@"error",
     .define,
     .undef,
 };
@@ -79,6 +80,7 @@ pub const Token = struct {
         @"if",
         @"else",
         include,
+        @"error",
         define,
         undef,
 
