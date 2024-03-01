@@ -14,13 +14,26 @@ pub const Error = Allocator.Error;
 
 const Context = struct {
     ally: Allocator,
+    output: std.ArrayListUnmanaged(Token) = .{},
 
     fn init(ally: Allocator) Context {
         return .{ .ally = ally };
     }
 
-    fn deinit(ctx: Context) void {
-        _ = ctx;
+    fn deinit(ctx: *Context) void {
+        ctx.output.deinit(ctx.ally);
+    }
+
+    fn append(ctx: *Context, token: Token) Allocator.Error!void {
+        try ctx.output.append(ctx.ally, token);
+    }
+
+    fn appendSlice(ctx: *Context, tokens: []const Token) Allocator.Error!void {
+        try ctx.output.appendSlice(ctx.ally, tokens);
+    }
+
+    fn toOwnedSlice(ctx: *Context) Allocator.Error![]const Token {
+        return try ctx.output.toOwnedSlice(ctx.ally);
     }
 };
 
@@ -52,11 +65,13 @@ const TokenSliceIterator = struct {
 };
 
 const Directive = union(enum) {
-    include_relative: []const u8,
-    include_system: []const u8,
+    include: Token,
 };
 
-fn parseDirective(eb: *ErrorBuffer, line: []const Token) Allocator.Error!?Directive {
+fn parseDirective(
+    eb: *ErrorBuffer,
+    line: []const Token,
+) Allocator.Error!?Directive {
     var iter = TokenSliceIterator{ .slice = line };
 
     const hash = iter.next() orelse unreachable;
@@ -71,8 +86,7 @@ fn parseDirective(eb: *ErrorBuffer, line: []const Token) Allocator.Error!?Direct
             };
 
             break :include switch (path_tok.tag) {
-                .string_lit => .{ .include_relative = path_tok.slice() },
-                .include_lit => .{ .include_system = path_tok.slice() },
+                .string_lit, .include_lit => .{ .include = path_tok },
                 else => {
                     try eb.add(path_tok.loc, .expected_include_path);
                     return null;
@@ -93,14 +107,44 @@ fn parseDirective(eb: *ErrorBuffer, line: []const Token) Allocator.Error!?Direct
     return directive;
 }
 
-fn execDirective(ctx: *Context, eb: *ErrorBuffer, directive: Directive) !void {
-    _ = ctx;
-    _ = eb;
-    switch (directive) {
-        .include_relative => |path| {
-            std.debug.panic("TODO include {s}\n", .{path});
+/// attempt to load an included file
+fn loadInclude(ctx: *Context, eb: *ErrorBuffer, tok: Token) Allocator.Error!?Source {
+    const inc_path_slice = tok.slice();
+    const inc_filename = inc_path_slice[1..inc_path_slice.len - 1];
+
+    switch (tok.tag) {
+        .string_lit => {
+            const src_path = tok.loc.source.get().filename;
+            const wd = std.fs.path.dirname(src_path) orelse "";
+
+            const inc_path = try std.fs.path.join(ctx.ally, &.{wd, inc_filename});
+            defer ctx.ally.free(inc_path);
+
+            // TODO search system include dirs
+
+            const src = sources.addPath(inc_path) catch {
+                try eb.add(tok.loc, .included_file_not_found);
+                return null;
+            };
+            return src;
         },
-        else => std.debug.panic("TODO exec {s}", .{@tagName(directive)}),
+        .include_lit => {
+            @panic("TODO");
+        },
+        else => unreachable,
+    }
+}
+
+fn execDirective(
+    ctx: *Context,
+    eb: *ErrorBuffer,
+    directive: Directive
+) Allocator.Error!void {
+    switch (directive) {
+        .include => |path_tok| {
+            const inc_src = try loadInclude(ctx, eb, path_tok) orelse return;
+            try preprocessInner(ctx, eb, inc_src);
+        },
     }
 }
 
@@ -108,7 +152,6 @@ fn preprocessLine(
     ctx: *Context,
     eb: *ErrorBuffer,
     line: []const Token,
-    out: *std.ArrayListUnmanaged(Token),
 ) Allocator.Error!void {
     if (line.len == 0) {
         return;
@@ -120,7 +163,7 @@ fn preprocessLine(
 
     // TODO macro expansion
 
-    try out.appendSlice(ctx.ally, line);
+    try ctx.appendSlice(line);
 }
 
 /// create compiler error from lexer error
@@ -141,22 +184,20 @@ fn preprocessInner(
     ctx: *Context,
     eb: *ErrorBuffer,
     src: Source,
-) Allocator.Error!?[]const Token {
+) Allocator.Error!void {
     var line_index: usize = 0;
     var line_buf = std.ArrayListUnmanaged(Token){};
     defer line_buf.deinit(ctx.ally);
-    var processed = std.ArrayListUnmanaged(Token){};
-    defer processed.deinit(ctx.ally);
 
     var lexer = Lexer.init(src);
     while (lexer.next() catch |e| {
         try diagnoseLexer(eb, lexer, e);
-        return null;
+        return;
     }) |token| {
         if (token.loc.line_index != line_index) {
             line_index = token.loc.line_index;
             if (line_buf.items.len > 0) {
-                try preprocessLine(ctx, eb, line_buf.items, &processed);
+                try preprocessLine(ctx, eb, line_buf.items);
                 line_buf.resize(ctx.ally, 0) catch unreachable;
             }
         }
@@ -165,10 +206,8 @@ fn preprocessInner(
     }
 
     if (line_buf.items.len > 0) {
-        try preprocessLine(ctx, eb, line_buf.items, &processed);
+        try preprocessLine(ctx, eb, line_buf.items);
     }
-
-    return try processed.toOwnedSlice(ctx.ally);
 }
 
 /// lexes and preprocesses a source. returns null when errors are created and
@@ -180,5 +219,8 @@ pub fn preprocess(
 ) Allocator.Error!?[]const Token {
     var ctx = Context.init(ally);
     defer ctx.deinit();
-    return try preprocessInner(&ctx, eb, src);
+
+    try preprocessInner(&ctx, eb, src);
+
+    return try ctx.toOwnedSlice();
 }

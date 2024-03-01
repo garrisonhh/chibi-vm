@@ -14,6 +14,7 @@ pub const Error = struct {
         unexpected_expression,
         unsupported_preprocessor_directive,
         expected_include_path,
+        included_file_not_found,
     };
 
     loc: Loc,
@@ -44,7 +45,7 @@ pub const Error = struct {
     }
 
     fn displayContext(loc: Loc, writer: anytype) @TypeOf(writer).Error!void {
-        const src_text = sources.get(loc.source).text;
+        const src_text = loc.source.get().text;
         var lines = std.mem.split(u8, src_text, "\n");
         for (0..loc.line_index) |_| {
             _ = lines.next();

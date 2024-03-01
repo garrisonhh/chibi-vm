@@ -4,7 +4,13 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
-pub const Source = enum(u16) { _ };
+pub const Source = enum(u16) {
+    _,
+
+    pub fn get(src: Source) File {
+        return map.get(src).?;
+    }
+};
 
 pub const File = struct {
     filename: []const u8,
@@ -35,7 +41,7 @@ pub const Loc = packed struct(u64) {
         writer: anytype,
     ) @TypeOf(writer).Error!void {
         try writer.print("{s}:{d}:{d}", .{
-            get(self.source).filename,
+            self.source.get().filename,
             self.lineno(),
             self.charno(),
         });
@@ -94,10 +100,6 @@ pub fn addPath(filepath: []const u8) AddPathError!Source {
     });
 
     return src;
-}
-
-pub fn get(src: Source) File {
-    return map.get(src).?;
 }
 
 /// sometimes in tests you need to create an ast node but you don't have a

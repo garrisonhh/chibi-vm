@@ -111,7 +111,7 @@ pub const Token = struct {
     stop: usize,
 
     pub fn slice(self: Self) []const u8 {
-        return sources.get(self.loc.source).text[self.start..self.stop];
+        return self.loc.source.get().text[self.start..self.stop];
     }
 
     /// location of the end of the token
@@ -149,7 +149,7 @@ loc: Loc,
 state: State = .newline,
 
 pub fn init(source: Source) Lexer {
-    const text = sources.get(source).text;
+    const text = source.get().text;
     return .{
         .text = text,
         .index = 0,
