@@ -14,6 +14,7 @@ pub const Error = struct {
         unexpected_expression,
         unsupported_preprocessor_directive,
         expected_include_path,
+        included_self,
         included_file_not_found,
     };
 

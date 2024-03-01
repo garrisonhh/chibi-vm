@@ -126,6 +126,11 @@ fn loadInclude(ctx: *Context, eb: *ErrorBuffer, tok: Token) Allocator.Error!?Sou
                 try eb.add(tok.loc, .included_file_not_found);
                 return null;
             };
+            if (src == tok.loc.source) {
+                try eb.add(tok.loc, .included_self);
+                return null;
+            }
+
             return src;
         },
         .include_lit => {
@@ -222,5 +227,6 @@ pub fn preprocess(
 
     try preprocessInner(&ctx, eb, src);
 
+    if (eb.hasErrors()) return null;
     return try ctx.toOwnedSlice();
 }

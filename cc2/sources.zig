@@ -52,6 +52,7 @@ var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const ally = gpa.allocator();
 
 var map = SourceMap{};
+var filenames = std.StringHashMapUnmanaged(Source){};
 
 pub fn deinit() void {
     for (map.values()) |f| {
@@ -59,10 +60,12 @@ pub fn deinit() void {
         ally.free(f.text);
     }
 
+    filenames.deinit(ally);
     map.deinit(ally);
 
     // reset for tests
     if (builtin.is_test) {
+        filenames = .{};
         map = .{};
         gpa = .{};
     }
@@ -91,15 +94,24 @@ pub const AddPathError =
 /// load a file from a filepath and store it
 pub fn addPath(filepath: []const u8) AddPathError!Source {
     const filename = try std.fs.path.relative(ally, ".", filepath);
-    const text = try std.fs.cwd().readFileAlloc(ally, filepath, std.math.maxInt(u32));
+    errdefer ally.free(filename);
 
-    const src: Source = @enumFromInt(map.count());
-    try map.put(ally, src, .{
-        .filename = filename,
-        .text = text,
-    });
+    var res = try filenames.getOrPut(ally, filename);
+    if (res.found_existing) {
+        ally.free(filename);
+    } else {
+        const text = try std.fs.cwd().readFileAlloc(ally, filepath, std.math.maxInt(u32));
+        errdefer ally.free(text);
 
-    return src;
+        const src: Source = @enumFromInt(map.count());
+        try map.put(ally, src, .{
+            .filename = filename,
+            .text = text,
+        });
+        res.value_ptr.* = src;
+    }
+
+    return res.value_ptr.*;
 }
 
 /// sometimes in tests you need to create an ast node but you don't have a
