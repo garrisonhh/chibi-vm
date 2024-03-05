@@ -61,11 +61,6 @@ pub const Expr = union(enum) {
     declspec: DeclSpec,
     pointer: Pointer,
     declaration: Declaration,
-
-    /// if this expr is an error, get the error
-    pub fn check(self: Self) ?errors.Error {
-        return if (self == .err) self.err else null;
-    }
 };
 
 /// represents a syntax tree for a single top level statement
@@ -124,6 +119,7 @@ pub const Tree = struct {
             tree: Tree,
             writer: Writer,
             level: u32 = 0,
+            on_newline: bool = true,
 
             fn enter(d: *@This()) void {
                 d.level += 1;
@@ -140,17 +136,23 @@ pub const Tree = struct {
                 var last: usize = 0;
                 for (slice, 0..) |ch, i| {
                     if (ch == '\n') {
-                        try d.writer.writeByteNTimes(' ', d.level * 2);
+                        if (d.on_newline) {
+                            try d.writer.writeByteNTimes(' ', d.level * 2);
+                        }
                         try d.writer.writeAll(slice[last..i]);
                         try d.writer.writeByte('\n');
+                        d.on_newline = true;
 
                         last = i + 1;
                     }
                 }
 
                 if (last != slice.len) {
-                    try d.writer.writeByteNTimes(' ', d.level * 2);
+                    if (d.on_newline) {
+                        try d.writer.writeByteNTimes(' ', d.level * 2);
+                    }
                     try d.writer.writeAll(slice[last..]);
+                    d.on_newline = false;
                 }
             }
 
@@ -270,11 +272,12 @@ fn tagTo(comptime Into: type, tag: Token.Tag) Into {
 }
 
 fn parseDeclSpec(p: *Parser, tree: *Tree) Error!?Id {
+    const start_index = p.index;
+    const loc = p.nextLoc();
+
     var is_const: bool = false;
     var signedness: ?Expr.Signedness = null;
     var basic: ?Expr.Type = null;
-
-    const loc = p.nextLoc();
 
     while (p.peek()) |token| {
         switch (token.tag) {
@@ -310,7 +313,9 @@ fn parseDeclSpec(p: *Parser, tree: *Tree) Error!?Id {
     }
 
     const final_ty = basic orelse {
-        return try tree.err(p.lastLoc(), .expected_type_specifier);
+        p.index = start_index;
+        try p.eb.add(p.lastLoc(), .expected_declspec);
+        return null;
     };
 
     return try tree.add(loc, .{ .declspec = .{
@@ -321,6 +326,7 @@ fn parseDeclSpec(p: *Parser, tree: *Tree) Error!?Id {
 }
 
 fn parseDeclarator(p: *Parser, tree: *Tree) Error!?Id {
+    const start_index = p.index;
     const tok = p.next() orelse {
         return try tree.err(p.lastLoc(), .expected_declarator);
     };
@@ -338,6 +344,7 @@ fn parseDeclarator(p: *Parser, tree: *Tree) Error!?Id {
                     },
                     else => break,
                 }
+                p.advance();
             }
 
             const child = try parseDeclarator(p, tree) orelse return null;
@@ -359,13 +366,20 @@ fn parseDeclarator(p: *Parser, tree: *Tree) Error!?Id {
 
             break :parens child;
         },
-        else => try tree.err(tok.loc, .expected_declarator),
+        else => err: {
+            p.index = start_index;
+            break :err try tree.err(tok.loc, .expected_declarator);
+        },
     };
 }
 
 fn parseDeclaration(p: *Parser, tree: *Tree) Error!?Id {
+    const start_index = p.index;
     const declspec = try parseDeclSpec(p, tree) orelse return null;
-    const declarator = try parseDeclarator(p, tree) orelse return null;
+    const declarator = try parseDeclarator(p, tree) orelse {
+        p.index = start_index;
+        return null;
+    };
 
     var declarators = declarator;
     while (true) {
@@ -375,6 +389,19 @@ fn parseDeclaration(p: *Parser, tree: *Tree) Error!?Id {
 
         const rhs = try parseDeclarator(p, tree) orelse return null;
         declarators = try tree.add(pk.loc, .{ .comma = .{ declarators, rhs } });
+    }
+
+    if (declarators == declarator) {
+        // TODO attempt to parse function body or decl value
+    }
+
+    // expect semicolon
+    if (p.next()) |pk| {
+        if (pk.tag != .semicolon) {
+            try p.eb.add(pk.loc, .expected_semicolon);
+        }
+    } else {
+        try p.eb.add(p.nextLoc(), .expected_semicolon);
     }
 
     return try tree.add(tree.getLoc(declspec), .{ .declaration = .{
@@ -397,7 +424,11 @@ pub fn parse(
     var p = Parser.init(ally, eb, tokens);
     tree.root = try parseDeclaration(&p, &tree);
 
-    // TODO collect errors from tree
+    for (tree.exprs.items(.expr)) |expr| {
+        if (expr == .err) {
+            try eb.errors.append(expr.err);
+        }
+    }
 
     return tree;
 }

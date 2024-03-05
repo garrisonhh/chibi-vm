@@ -79,6 +79,11 @@ fn run(ally: Allocator, args: []const Cli.Arg) !void {
                 try stdout.print("[parsed]\n", .{});
                 try tree.display(root, stdout);
             }
+
+            if (eb.hasErrors()) {
+                try eb.display(stderr);
+                eb.clear();
+            }
         }
 
         if (eb.hasErrors()) {

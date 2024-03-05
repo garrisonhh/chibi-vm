@@ -5,11 +5,12 @@ const Loc = sources.Loc;
 
 pub const Error = struct {
     pub const Kind = union(enum) {
+        unexpected_expression,
+
         // lex/preprocess errors
         invalid_character,
         unfinished_string,
         unfinished_include,
-        unexpected_expression,
         unsupported_preprocessor_directive,
         expected_include_path,
         included_self,
@@ -18,8 +19,9 @@ pub const Error = struct {
 
         // parse errors
         expected_rparen,
+        expected_semicolon,
         expected_block_or_value,
-        expected_type_specifier,
+        expected_declspec,
         extra_basic_type,
         extra_type_qualifier,
         extra_signedness,
@@ -103,6 +105,10 @@ pub const ErrorBuffer = struct {
 
     pub fn hasErrors(self: Self) bool {
         return self.errors.items.len > 0;
+    }
+
+    pub fn clear(self: *Self) void {
+        self.errors.resize(0) catch unreachable;
     }
 
     pub fn display(self: Self, writer: anytype) @TypeOf(writer).Error!void {
