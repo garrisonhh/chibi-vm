@@ -34,6 +34,10 @@ const pp_symbols = [_]Symbol{
 };
 
 const c_keywords = [_]Token.Tag{
+    .@"const",
+    .void,
+    .unsigned,
+    .signed,
     .char,
     .short,
     .int,
@@ -70,6 +74,10 @@ pub const Token = struct {
         include_lit,
 
         // keywords
+        @"const",
+        void,
+        unsigned,
+        signed,
         char,
         short,
         int,

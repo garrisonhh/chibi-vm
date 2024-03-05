@@ -5,11 +5,9 @@ const Loc = sources.Loc;
 
 pub const Error = struct {
     pub const Kind = union(enum) {
-        /// lexer encountered invalid byte(s)
+        // lex/preprocess errors
         invalid_character,
-        /// lexer encountered unfinished "string"
         unfinished_string,
-        /// lexer encountered unfinished <string>
         unfinished_include,
         unexpected_expression,
         unsupported_preprocessor_directive,
@@ -17,10 +15,26 @@ pub const Error = struct {
         included_self,
         included_file_not_found,
         error_directive,
+
+        // parse errors
+        expected_rparen,
+        expected_block_or_value,
+        expected_type_specifier,
+        extra_basic_type,
+        extra_type_qualifier,
+        extra_signedness,
+        expected_declarator,
     };
 
     loc: Loc,
     kind: Kind,
+
+    pub fn init(loc: Loc, kind: Kind) Error {
+        return Error{
+            .loc = loc,
+            .kind = kind,
+        };
+    }
 
     fn displayMessage(kind: Kind, writer: anytype) @TypeOf(writer).Error!void {
         switch (kind) {
@@ -84,10 +98,7 @@ pub const ErrorBuffer = struct {
     }
 
     pub fn add(self: *Self, loc: Loc, kind: Error.Kind) Allocator.Error!void {
-        try self.errors.append(Error{
-            .loc = loc,
-            .kind = kind,
-        });
+        try self.errors.append(Error.init(loc, kind));
     }
 
     pub fn hasErrors(self: Self) bool {

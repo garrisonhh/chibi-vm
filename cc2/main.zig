@@ -1,5 +1,6 @@
 const std = @import("std");
 const stderr = std.io.getStdErr().writer();
+const stdout = std.io.getStdOut().writer();
 const Allocator = std.mem.Allocator;
 const argz = @import("argz.zig");
 const errors = @import("errors.zig");
@@ -7,6 +8,7 @@ const ErrorBuffer = errors.ErrorBuffer;
 const sources = @import("sources.zig");
 const Source = sources.Source;
 const pp = @import("preprocess.zig");
+const parse = @import("parse.zig");
 
 const CliOptions = enum {
     run,
@@ -63,11 +65,26 @@ fn run(ally: Allocator, args: []const Cli.Arg) !void {
         };
         defer ally.free(tokens);
 
-        for (tokens) |token| {
-            std.debug.print("{} `{s}`\n", .{ token, token.slice() });
+        var toplevels = parse.splitToplevel(tokens);
+        while (toplevels.next()) |toplevel_tokens| {
+            try stdout.print("[lexed]\n", .{});
+            for (toplevel_tokens) |token| {
+                try stdout.print("{} `{s}`\n", .{ token, token.slice() });
+            }
+
+            var tree = try parse.parse(ally, &eb, toplevel_tokens);
+            defer tree.deinit();
+
+            if (tree.root) |root| {
+                try stdout.print("[parsed]\n", .{});
+                try tree.display(root, stdout);
+            }
         }
 
-        // TODO parse
+        if (eb.hasErrors()) {
+            try eb.display(stderr);
+            return;
+        }
     }
 }
 
