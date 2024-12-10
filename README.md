@@ -42,7 +42,7 @@ with an interface that is pleasant to hack on.
 
 ## getting started
 
-chibi-vm is built with zig 0.11.0. just `zig build` for a debug build or
+chibi-vm is built with zig 0.13.0. just `zig build` for a debug build or
 `zig build -Doptimize=ReleaseFast` for a release build.
 
 ### usage

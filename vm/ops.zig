@@ -49,13 +49,13 @@ pub const Opcode = enum(u6) {
     negf,
 
     // logic
-    @"or",
     @"and",
+    @"or",
     not,
 
     // bitwise logic
-    bitor,
     bitand,
+    bitor,
     bitcom,
     bitxor,
 

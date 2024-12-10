@@ -211,7 +211,7 @@ fn CaseArgs(comptime F: type) type {
 
         return @Type(.{
             .Struct = .{
-                .layout = .Auto,
+                .layout = .auto,
                 .fields = &fields,
                 .decls = &.{},
                 .is_tuple = true,

@@ -1,6 +1,4 @@
 const std = @import("std");
-const stderr = std.io.getStdErr().writer();
-const stdout = std.io.getStdOut().writer();
 const Allocator = std.mem.Allocator;
 const argz = @import("argz.zig");
 const errors = @import("errors.zig");
@@ -38,6 +36,9 @@ fn deinit() void {
 fn run(ally: Allocator, args: []const Cli.Arg) !void {
     try init();
     defer deinit();
+
+    const stderr = std.io.getStdErr().writer();
+    const stdout = std.io.getStdOut().writer();
 
     var eb = ErrorBuffer.init(ally);
     defer eb.deinit();
@@ -102,6 +103,7 @@ pub fn main() !void {
     defer std.process.argsFree(ally, raw_args);
 
     const res = try cli.parse(ally, raw_args) orelse {
+        const stderr = std.io.getStdErr().writer();
         try cli.usage(raw_args, stderr);
         std.process.exit(1);
     };

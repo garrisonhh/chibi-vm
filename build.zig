@@ -35,30 +35,37 @@ pub fn build(b: *std.Build) void {
 
     // modules
     const chibi_mod = b.addModule("chibi", .{
-        .source_file = .{ .path = "cc/chibi/chibi.zig" },
+        .root_source_file = b.path("cc/chibi/chibi.zig"),
     });
     const vm = b.addModule("vm", .{
-        .source_file = .{ .path = "vm/main.zig" },
+        .root_source_file = b.path("vm/main.zig"),
     });
 
     // cc
     const cc = b.addExecutable(.{
         .name = "chibi-vm",
-        .root_source_file = .{ .path = "cc/main.zig" },
+        .root_source_file = b.path("cc/main.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     cc.linkLibC();
-    cc.addCSourceFiles(&chibi.c_sources, chibi.cFlags(optimize));
-    cc.addModule("chibi", chibi_mod);
-    cc.addModule("vm", vm);
+    cc.addCSourceFiles(.{
+        .files = &chibi.c_sources,
+        .flags = chibi.cFlags(optimize),
+    });
+    cc.root_module.addImport("chibi", chibi_mod);
+    cc.root_module.addImport("vm", vm);
+
+    const install_cc = b.addInstallArtifact(cc, .{});
+    const install_cc_step = b.step("cc", "Build chibi cc");
+    install_cc_step.dependOn(&install_cc.step);
 
     b.installArtifact(cc);
 
     // run cc
     const run_cc_cmd = b.addRunArtifact(cc);
-    run_cc_cmd.step.dependOn(b.getInstallStep());
+    run_cc_cmd.step.dependOn(&install_cc.step);
     if (b.args) |args| run_cc_cmd.addArgs(args);
 
     const run_cc_step = b.step("run-cc", "Run chibi cc");
@@ -67,18 +74,22 @@ pub fn build(b: *std.Build) void {
     // cc2
     const cc2 = b.addExecutable(.{
         .name = "cc2",
-        .root_source_file = .{ .path = "cc2/main.zig" },
+        .root_source_file = b.path("cc2/main.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    cc2.addModule("vm", vm);
+    cc2.root_module.addImport("vm", vm);
+
+    const install_cc2 = b.addInstallArtifact(cc2, .{});
+    const install_cc2_step = b.step("cc2", "Build cc2");
+    install_cc2_step.dependOn(&install_cc2.step);
 
     b.installArtifact(cc2);
 
     // run cc2
     const run_cc2_cmd = b.addRunArtifact(cc2);
-    run_cc2_cmd.step.dependOn(b.getInstallStep());
+    run_cc2_cmd.step.dependOn(&install_cc2.step);
     if (b.args) |args| run_cc2_cmd.addArgs(args);
 
     const run_cc2_step = b.step("run-cc2", "Run cc2");
@@ -86,12 +97,12 @@ pub fn build(b: *std.Build) void {
 
     // vm tests
     const unit_tests = b.addTest(.{
-        .root_source_file = .{ .path = "vm/tests/tests.zig" },
+        .root_source_file = b.path("vm/tests/tests.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    unit_tests.addModule("vm", vm);
+    unit_tests.root_module.addImport("vm", vm);
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 

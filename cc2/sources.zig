@@ -96,7 +96,7 @@ pub fn addPath(filepath: []const u8) AddPathError!Source {
     const filename = try std.fs.path.relative(ally, ".", filepath);
     errdefer ally.free(filename);
 
-    var res = try filenames.getOrPut(ally, filename);
+    const res = try filenames.getOrPut(ally, filename);
     if (res.found_existing) {
         ally.free(filename);
     } else {
