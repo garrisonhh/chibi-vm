@@ -73,13 +73,12 @@ fn run(ally: Allocator, args: []const Cli.Arg) !void {
                 try stdout.print("{} `{s}`\n", .{ token, token.slice() });
             }
 
-            var tree = try parse.parse(ally, &eb, toplevel_tokens);
+            var tree = try parse.parse(ally, toplevel_tokens);
             defer tree.deinit();
 
-            if (tree.root) |root| {
-                try stdout.print("[parsed]\n", .{});
-                try tree.display(root, stdout);
-            }
+            try tree.collectErrors(&eb);
+            try stdout.print("[parsed]\n", .{});
+            try tree.display(stdout);
 
             if (eb.hasErrors()) {
                 try eb.display(stderr);

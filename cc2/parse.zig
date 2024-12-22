@@ -1,17 +1,17 @@
-//! recursive descent parser for c
+//! recursive descent parser for c, heavily based off of katahiromz's grammar
 //!
 //! basic info to understand this code:
 //! - the parser is intended to be run on individual toplevel statements, split
-//!   by an iterator. it is designed this way in order to:
+//!   by an iterator
+//!   - after parsing, the resulting tree should be inspected for errors
+//!   - it is designed this way in order to:
 //!     1. take advantage of C's restrictions to elegantly handle the type
 //!        system
 //!     2. allow a much larger amount of the translation unit to be analyzed
 //!        before failure, producing more intelligent error output
-//! - if possible, errors are added to a tree as ast nodes
-//!     - recoverable errors can also be added to the error buffer if this is
-//!       inconvenient
-//! - on unrecoverable error, parse functions should reset to their initial
-//!   token index and return null
+//! - this parser is written with error handling held heavily in mind
+//!   - all errors should be created as exprs, allowing parsing to gracefully
+//!     ignore or handle errors as necessary
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -21,46 +21,57 @@ const errors = @import("errors.zig");
 const ErrorBuffer = errors.ErrorBuffer;
 const Token = @import("Lexer.zig").Token;
 
-pub const Id = enum(u32) { _ };
+pub const Id = enum(u31) { _ };
 
 pub const Expr = union(enum) {
     const Self = @This();
+    pub const Kind = std.meta.Tag(Self);
 
-    pub const Signedness = enum {
-        signed,
-        unsigned,
-    };
-
-    pub const Type = enum {
-        char,
-        int,
-        long,
-        long_long,
-    };
-
-    pub const DeclSpec = struct {
-        is_const: bool,
-        signedness: ?Signedness,
-        /// underlying type
-        type: Type,
-    };
-
-    pub const Pointer = struct {
-        is_const: bool,
-        child: ?Id,
-    };
-
-    pub const Declaration = struct {
-        declspec: Id,
-        declarator: Id,
-    };
-
-    err: errors.Error,
+    err: errors.Error.Kind,
     ident: []const u8,
-    comma: [2]Id,
-    declspec: DeclSpec,
-    pointer: Pointer,
-    declaration: Declaration,
+
+    @"const",
+    void,
+    unsigned,
+    signed,
+    char,
+    short,
+    int,
+    long,
+    float,
+    double,
+    star,
+
+    pointers,
+    pointer,
+    block,
+    params,
+    parens,
+    declspecs,
+    declarator,
+    function_definition,
+
+    pub fn format(
+        self: Self,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        try writer.print("{s} ", .{@tagName(self)});
+        switch (self) {
+            .err => |tag| {
+                try writer.print("{s}", .{@tagName(tag)});
+            },
+            .ident => |ident| {
+                try writer.print("{s}", .{ident});
+            },
+            inline else => |data, tag| {
+                if (comptime @TypeOf(data) != void) {
+                    @compileError("plz handle " ++ @tagName(tag));
+                }
+            },
+        }
+    }
 };
 
 /// represents a syntax tree for a single top level statement
@@ -70,6 +81,9 @@ pub const Tree = struct {
     const Entry = struct {
         loc: Loc,
         expr: Expr,
+        first_child: ?Id = null,
+        last_child: ?Id = null,
+        next: ?Id = null,
     };
 
     arena: std.heap.ArenaAllocator,
@@ -102,8 +116,12 @@ pub const Tree = struct {
     }
 
     /// sugar for constructing an error expr
-    fn err(self: *Self, loc: Loc, kind: errors.Error.Kind) Allocator.Error!Id {
-        return try self.add(loc, .{ .err = errors.Error.init(loc, kind) });
+    fn addErr(self: *Self, loc: Loc, kind: errors.Error.Kind) Allocator.Error!Id {
+        return try self.add(loc, .{ .err = kind });
+    }
+
+    fn isErr(self: Self, id: Id) bool {
+        return self.exprs.items(.expr)[@intFromEnum(id)] == .err;
     }
 
     fn get(self: Self, id: Id) Expr {
@@ -114,92 +132,91 @@ pub const Tree = struct {
         return self.exprs.items(.loc)[@intFromEnum(id)];
     }
 
-    fn Display(comptime Writer: type) type {
-        return struct {
-            tree: Tree,
-            writer: Writer,
-            level: u32 = 0,
-            on_newline: bool = true,
+    // append a node to a detached (parentless) node
+    fn appendDetached(self: Self, node: Id, other: Id) void {
+        std.debug.assert(self.exprs.items(.next)[@intFromEnum(node)] == null);
+        self.exprs.items(.next)[@intFromEnum(node)] = other;
+    }
 
-            fn enter(d: *@This()) void {
-                d.level += 1;
-            }
+    fn appendChild(self: Self, node: Id, child: Id) void {
+        const node_index = @intFromEnum(node);
+        if (self.exprs.items(.last_child)[node_index]) |prev_last_child| {
+            self.exprs.items(.next)[@intFromEnum(prev_last_child)] = child;
+        } else {
+            self.exprs.items(.first_child)[node_index] = child;
+        }
 
-            fn exit(d: *@This()) void {
-                d.level -= 1;
-            }
+        var last_child = child;
+        while (self.exprs.items(.next)[@intFromEnum(last_child)]) |next_child| {
+            last_child = next_child;
+        }
 
-            fn print(d: *@This(), comptime fmt: []const u8, args: anytype) Writer.Error!void {
-                var buf: [512]u8 = undefined;
-                const slice = std.fmt.bufPrint(&buf, fmt, args) catch "<buffer overflow>";
+        self.exprs.items(.last_child)[node_index] = last_child;
+    }
 
-                var last: usize = 0;
-                for (slice, 0..) |ch, i| {
-                    if (ch == '\n') {
-                        if (d.on_newline) {
-                            try d.writer.writeByteNTimes(' ', d.level * 2);
-                        }
-                        try d.writer.writeAll(slice[last..i]);
-                        try d.writer.writeByte('\n');
-                        d.on_newline = true;
+    const ChildIterator = struct {
+        child_nexts: []const ?Id,
+        trav: ?Id,
 
-                        last = i + 1;
-                    }
-                }
+        fn next(iter: *@This()) ?Id {
+            const node = iter.trav orelse return null;
+            iter.trav = iter.child_nexts[@intFromEnum(node)];
+            return node;
+        }
+    };
 
-                if (last != slice.len) {
-                    if (d.on_newline) {
-                        try d.writer.writeByteNTimes(' ', d.level * 2);
-                    }
-                    try d.writer.writeAll(slice[last..]);
-                    d.on_newline = false;
-                }
-            }
-
-            fn display(d: *@This(), id: Id) Writer.Error!void {
-                const expr = d.tree.get(id);
-                try d.print("{s}:\n", .{@tagName(expr)});
-
-                d.enter();
-                defer d.exit();
-
-                switch (expr) {
-                    .err => |e| try d.print("{s}\n", .{@tagName(e.kind)}),
-                    .ident => |str| try d.print("{s}\n", .{str}),
-                    .pointer => |p| {
-                        if (p.is_const) try d.print("const\n", .{});
-                        if (p.child) |child| {
-                            try d.display(child);
-                        }
-                    },
-                    .declspec => |ds| {
-                        if (ds.is_const) try d.print("const ", .{});
-                        if (ds.signedness) |sign| {
-                            try d.print("{s} ", .{@tagName(sign)});
-                        }
-
-                        try d.print("{s}\n", .{@tagName(ds.type)});
-                    },
-                    .declaration => |decl| {
-                        try d.display(decl.declspec);
-                        try d.display(decl.declarator);
-                    },
-                    .comma => |bin| {
-                        try d.display(bin[0]);
-                        try d.display(bin[1]);
-                    },
-                }
-            }
+    fn children(self: Self, node: Id) ChildIterator {
+        return .{
+            .child_nexts = self.exprs.items(.next),
+            .trav = self.exprs.items(.first_child)[@intFromEnum(node)],
         };
     }
 
-    /// dump a tree to a writer
-    pub fn display(self: Self, id: Id, writer: anytype) @TypeOf(writer).Error!void {
-        var d = Display(@TypeOf(writer)){
-            .tree = self,
-            .writer = writer,
-        };
-        try d.display(id);
+    fn collectErrorsRecursive(
+        self: Self,
+        eb: *ErrorBuffer,
+        id: Id,
+    ) Allocator.Error!void {
+        if (self.isErr(id)) {
+            try eb.add(self.getLoc(id), self.get(id).err);
+        }
+
+        var child_iter = self.children(id);
+        while (child_iter.next()) |child| {
+            try self.collectErrorsRecursive(eb, child);
+        }
+    }
+
+    pub fn collectErrors(self: Self, eb: *ErrorBuffer) Allocator.Error!void {
+        if (self.root) |root| {
+            try self.collectErrorsRecursive(eb, root);
+        }
+    }
+
+    fn displayExpr(
+        self: Self,
+        id: Id,
+        level: usize,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        try writer.writeByteNTimes(' ', 2 * level);
+        try writer.print("{}\n", .{self.get(id)});
+
+        var child_iter = self.children(id);
+        while (child_iter.next()) |child| {
+            try self.displayExpr(child, level + 1, writer);
+        }
+    }
+
+    /// print out tree (mostly for debugging)
+    pub fn display(self: Self, writer: anytype) @TypeOf(writer).Error!void {
+        if (self.root) |root| {
+            try self.displayExpr(root, 0, writer);
+        } else {
+            try writer.print("(empty tree)", .{});
+        }
+
+        try writer.print("\n", .{});
     }
 };
 
@@ -207,26 +224,11 @@ pub const Tree = struct {
 
 /// context for parsing a toplevel statement
 const Parser = struct {
-    arena: std.heap.ArenaAllocator,
-    eb: *ErrorBuffer,
     tokens: []const Token,
     index: usize = 0,
 
-    fn init(ally: Allocator, eb: *ErrorBuffer, tokens: []const Token) Parser {
-        std.debug.assert(tokens.len > 0);
-        return Parser{
-            .arena = std.heap.ArenaAllocator.init(ally),
-            .eb = eb,
-            .tokens = tokens,
-        };
-    }
-
-    fn deinit(p: *Parser) void {
-        p.arena.deinit();
-    }
-
-    fn allocator(p: *Parser) Allocator {
-        return p.arena.allocator();
+    fn init(tokens: []const Token) Parser {
+        return .{ .tokens = tokens };
     }
 
     /// returns a location located approximately before the current token position
@@ -265,155 +267,222 @@ const Parser = struct {
     }
 };
 
+fn parseToken(p: *Parser, tag: Token.Tag) ?Token {
+    const tok = p.peek() orelse return null;
+    if (tok.tag != tag) return null;
+    p.advance();
+    return tok;
+}
+
 pub const Error = Allocator.Error;
+const ParseFn = fn (p: *Parser, tree: *Tree) Error!Id;
 
-fn tagTo(comptime Into: type, tag: Token.Tag) Into {
-    return std.meta.stringToEnum(Into, @tagName(tag)).?;
+fn parseIdent(p: *Parser, tree: *Tree) Error!Id {
+    const tok = parseToken(p, .ident) orelse {
+        return try tree.addErr(p.nextLoc(), .expected_identifier);
+    };
+    const ident = try tree.allocator().dupe(u8, tok.slice());
+    return try tree.add(tok.loc, .{ .ident = ident });
 }
 
-fn parseDeclSpec(p: *Parser, tree: *Tree) Error!?Id {
-    const start_index = p.index;
-    const loc = p.nextLoc();
-
-    var is_const: bool = false;
-    var signedness: ?Expr.Signedness = null;
-    var basic: ?Expr.Type = null;
-
-    while (p.peek()) |token| {
-        switch (token.tag) {
-            .@"const" => {
-                if (is_const) {
-                    try p.eb.add(token.loc, .extra_type_qualifier);
-                }
-                is_const = true;
-            },
-            .unsigned, .signed => {
-                const token_sign = tagTo(Expr.Signedness, token.tag);
-                if (signedness != null) {
-                    try p.eb.add(token.loc, .extra_signedness);
-                } else {
-                    signedness = token_sign;
-                }
-            },
-            .char, .int, .long => {
-                const token_ty = tagTo(Expr.Type, token.tag);
-
-                if (basic == null) {
-                    basic = token_ty;
-                } else if (basic.? == .long and token.tag == .long) {
-                    basic = .long_long;
-                } else {
-                    try p.eb.add(token.loc, .extra_basic_type);
-                }
-            },
-            else => break,
-        }
-
-        p.advance();
-    }
-
-    const final_ty = basic orelse {
-        p.index = start_index;
-        try p.eb.add(p.lastLoc(), .expected_declspec);
-        return null;
-    };
-
-    return try tree.add(loc, .{ .declspec = .{
-        .is_const = is_const,
-        .signedness = signedness,
-        .type = final_ty,
-    } });
-}
-
-fn parseDeclarator(p: *Parser, tree: *Tree) Error!?Id {
-    const start_index = p.index;
-    const tok = p.next() orelse {
-        return try tree.err(p.lastLoc(), .expected_declarator);
-    };
-    return switch (tok.tag) {
-        .ident => try tree.add(tok.loc, .{ .ident = tok.slice() }),
-        .star => ptr: {
-            var is_const = false;
-            while (p.peek()) |pk| {
-                switch (pk.tag) {
-                    .@"const" => {
-                        if (is_const) {
-                            try p.eb.add(pk.loc, .extra_type_qualifier);
-                        }
-                        is_const = true;
-                    },
-                    else => break,
-                }
-                p.advance();
-            }
-
-            const child = try parseDeclarator(p, tree) orelse return null;
-            break :ptr try tree.add(tok.loc, .{ .pointer = .{
-                .is_const = is_const,
-                .child = child,
-            } });
-        },
-        .lparen => parens: {
-            const child = try parseDeclarator(p, tree) orelse return null;
-            const next = p.next() orelse {
-                try p.eb.add(p.lastLoc(), .expected_rparen);
-                return null;
+/// parse a token tag into an expr with no attached data
+fn parseSymbol(
+    comptime tag: Token.Tag,
+    comptime into: Expr.Kind,
+    comptime fail_err: errors.Error.Kind,
+) ParseFn {
+    return struct {
+        fn f(p: *Parser, tree: *Tree) Error!Id {
+            const tok = parseToken(p, tag) orelse {
+                return try tree.addErr(p.nextLoc(), fail_err);
             };
-            if (next.tag != .rparen) {
-                try p.eb.add(next.loc, .expected_rparen);
-                return null;
+            return try tree.add(tok.loc, @unionInit(Expr, @tagName(into), {}));
+        }
+    }.f;
+}
+
+/// attempt to parse each func in order until one works
+fn parseOneOf(
+    comptime fail_err: errors.Error.Kind,
+    comptime funcs: anytype,
+) ParseFn {
+    return struct {
+        fn f(p: *Parser, tree: *Tree) Error!Id {
+            inline for (funcs) |func| {
+                const res = try func(p, tree);
+                if (!tree.isErr(res)) {
+                    return res;
+                }
             }
 
-            break :parens child;
-        },
-        else => err: {
-            p.index = start_index;
-            break :err try tree.err(tok.loc, .expected_declarator);
-        },
-    };
-}
-
-fn parseDeclaration(p: *Parser, tree: *Tree) Error!?Id {
-    const start_index = p.index;
-    const declspec = try parseDeclSpec(p, tree) orelse return null;
-    const declarator = try parseDeclarator(p, tree) orelse {
-        p.index = start_index;
-        return null;
-    };
-
-    var declarators = declarator;
-    while (true) {
-        const pk = p.peek() orelse break;
-        if (pk.tag != .comma) break;
-        p.advance();
-
-        const rhs = try parseDeclarator(p, tree) orelse return null;
-        declarators = try tree.add(pk.loc, .{ .comma = .{ declarators, rhs } });
-    }
-
-    if (declarators == declarator) {
-        // TODO attempt to parse function body or decl value
-    }
-
-    // expect semicolon
-    if (p.next()) |pk| {
-        if (pk.tag != .semicolon) {
-            try p.eb.add(pk.loc, .expected_semicolon);
+            return try tree.addErr(p.nextLoc(), fail_err);
         }
-    } else {
-        try p.eb.add(p.nextLoc(), .expected_semicolon);
+    }.f;
+}
+
+fn parseMany(comptime container: Expr.Kind, comptime func: ParseFn) ParseFn {
+    return struct {
+        fn f(p: *Parser, tree: *Tree) Error!Id {
+            const node = try tree.add(
+                p.nextLoc(),
+                @unionInit(Expr, @tagName(container), {}),
+            );
+            while (true) {
+                const res = try func(p, tree);
+                if (tree.isErr(res)) break;
+                tree.appendChild(node, res);
+            }
+
+            return node;
+        }
+    }.f;
+}
+
+/// parse a series of parsers into one expr
+fn parseContainer(
+    comptime container: Expr.Kind,
+    comptime fail_err: errors.Error.Kind,
+    comptime funcs: anytype,
+) ParseFn {
+    return struct {
+        fn f(p: *Parser, tree: *Tree) Error!Id {
+            const start = p.index;
+            const node = try tree.add(
+                p.nextLoc(),
+                @unionInit(Expr, @tagName(container), {}),
+            );
+            inline for (funcs) |func| {
+                const res = try func(p, tree);
+                tree.appendChild(node, res);
+
+                if (tree.isErr(res)) {
+                    if (p.index == start) {
+                        // recoverable error
+                        return try tree.addErr(p.nextLoc(), fail_err);
+                    } else {
+                        // unrecoverable error
+                        break;
+                    }
+                }
+            }
+
+            return node;
+        }
+    }.f;
+}
+
+fn parseOptional(comptime container: Expr.Kind, comptime func: ParseFn) ParseFn {
+    return struct {
+        fn f(p: *Parser, tree: *Tree) Error!Id {
+            const node = try tree.add(
+                p.nextLoc(),
+                @unionInit(Expr, @tagName(container), {}),
+            );
+            const res = try func(p, tree);
+            if (!tree.isErr(res)) {
+                tree.appendChild(node, res);
+            }
+            return node;
+        }
+    }.f;
+}
+
+const parseDeclSpecs = parseMany(.declspecs, parseOneOf(.unexpected, .{
+    parseSymbol(.@"const", .@"const", .unexpected),
+    parseSymbol(.int, .int, .unexpected),
+}));
+
+fn parsePointers(p: *Parser, tree: *Tree) Error!Id {
+    const pointers = try tree.add(p.nextLoc(), .pointers);
+    var trav = pointers;
+    while (parseToken(p, .star)) |star| {
+        const node = try tree.add(star.loc, .pointer);
+        tree.appendChild(trav, node);
+        trav = node;
     }
 
-    return try tree.add(tree.getLoc(declspec), .{ .declaration = .{
-        .declspec = declspec,
-        .declarator = declarators,
-    } });
+    return pointers;
 }
+
+fn parseDirectDeclarator(p: *Parser, tree: *Tree) Error!Id {
+    const start = p.index;
+    _ = start;
+
+    // parse initial
+    var dd: Id = initial: {
+        const ident_res = try parseIdent(p, tree);
+        if (!tree.isErr(ident_res)) {
+            break :initial ident_res;
+        }
+
+        if (parseToken(p, .lparen)) |tok| {
+            return try tree.addErr(tok.loc, .unimplemented_expression);
+        }
+
+        return try tree.addErr(p.nextLoc(), .expected_direct_declarator);
+    };
+
+    while (true) {
+        if (parseToken(p, .lparen)) |lparen| {
+            const params = try tree.add(tree.getLoc(dd), .params);
+            const parens = try tree.add(lparen.loc, .parens);
+            tree.appendChild(params, dd);
+            tree.appendChild(params, parens);
+            dd = params;
+
+            if (parseToken(p, .rparen)) |_| {
+                break;
+            }
+
+            return try tree.addErr(p.nextLoc(), .unimplemented_expression);
+        } // TODO else if parse lbracket
+        else break;
+    }
+
+    return dd;
+}
+
+fn parseCompoundStatement(p: *Parser, tree: *Tree) Error!Id {
+    const start = p.index;
+
+    const lcurly = parseToken(p, .lcurly) orelse {
+        return try tree.addErr(p.nextLoc(), .expected_compound_statement);
+    };
+    const container = try tree.add(lcurly.loc, .block);
+
+    // TODO parse declarations & statements
+
+    _ = parseToken(p, .rcurly) orelse {
+        p.index = start;
+        return try tree.addErr(lcurly.loc, .unfinished_block);
+    };
+
+    return container;
+}
+
+const parseDeclarator = parseContainer(.declarator, .unexpected, .{
+    parsePointers,
+    parseDirectDeclarator,
+});
+
+const parseFunctionDefinition = parseContainer(.function_definition, .unexpected, .{
+    parseDeclSpecs,
+    parseDeclarator,
+    parseCompoundStatement,
+});
+
+fn parseDeclaration(p: *Parser, tree: *Tree) Error!Id {
+    return try tree.addErr(p.nextLoc(), .unimplemented_expression);
+}
+
+const parseExternalDeclaration = parseOneOf(.expected_toplevel_statement, .{
+    parseFunctionDefinition,
+    parseDeclaration,
+});
 
 /// parse a toplevel declaration
 pub fn parse(
     ally: Allocator,
-    eb: *ErrorBuffer,
     tokens: []const Token,
 ) Error!Tree {
     std.debug.assert(tokens.len > 0);
@@ -421,13 +490,12 @@ pub fn parse(
     var tree = Tree.init(ally);
     errdefer tree.deinit();
 
-    var p = Parser.init(ally, eb, tokens);
-    tree.root = try parseDeclaration(&p, &tree);
+    var p = Parser.init(tokens);
+    tree.root = try parseExternalDeclaration(&p, &tree);
 
-    for (tree.exprs.items(.expr)) |expr| {
-        if (expr == .err) {
-            try eb.errors.append(expr.err);
-        }
+    if (!p.done()) {
+        const extra_tokens_err = try tree.addErr(p.nextLoc(), .unexpected_expression);
+        tree.appendChild(tree.root.?, extra_tokens_err);
     }
 
     return tree;

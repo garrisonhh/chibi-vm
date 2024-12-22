@@ -135,6 +135,8 @@ fn loadInclude(ctx: *Context, eb: *ErrorBuffer, tok: Token) Allocator.Error!?Sou
             return src;
         },
         .include_lit => {
+            // TODO search system include dirs
+
             @panic("TODO");
         },
         else => unreachable,
