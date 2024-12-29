@@ -85,23 +85,23 @@ fn parseDirective(eb: *ErrorBuffer, line: []const Token) Allocator.Error!?Direct
             break :include switch (path_tok.tag) {
                 .string_lit, .include_lit => .{ .include = path_tok },
                 else => {
-                    try eb.add(path_tok.loc, .expected_include_path);
+                    try eb.add(path_tok.loc(), .expected_include_path);
                     return null;
                 },
             };
         },
         .@"error" => {
-            try eb.add(dir_tok.loc, .error_directive);
+            try eb.add(dir_tok.loc(), .error_directive);
             return null;
         },
         else => {
-            try eb.add(dir_tok.loc, .unsupported_preprocessor_directive);
+            try eb.add(dir_tok.loc(), .unsupported_preprocessor_directive);
             return null;
         },
     };
 
     if (iter.next()) |tok| {
-        try eb.add(tok.loc, .unexpected_expression);
+        try eb.add(tok.loc(), .unexpected_expression);
         return null;
     }
 
@@ -115,7 +115,7 @@ fn loadInclude(ctx: *Context, eb: *ErrorBuffer, tok: Token) Allocator.Error!?Sou
 
     switch (tok.tag) {
         .string_lit => {
-            const src_path = tok.loc.source.get().filename;
+            const src_path = tok.source.get().filename;
             const wd = std.fs.path.dirname(src_path) orelse "";
 
             const inc_path = try std.fs.path.join(ctx.ally, &.{ wd, inc_filename });
@@ -124,11 +124,11 @@ fn loadInclude(ctx: *Context, eb: *ErrorBuffer, tok: Token) Allocator.Error!?Sou
             // TODO search system include dirs
 
             const src = sources.addPath(inc_path) catch {
-                try eb.add(tok.loc, .included_file_not_found);
+                try eb.add(tok.loc(), .included_file_not_found);
                 return null;
             };
-            if (src == tok.loc.source) {
-                try eb.add(tok.loc, .included_self);
+            if (src == tok.source) {
+                try eb.add(tok.loc(), .included_self);
                 return null;
             }
 
@@ -149,6 +149,8 @@ fn execDirective(ctx: *Context, eb: *ErrorBuffer, directive: Directive) Allocato
             const inc_src = try loadInclude(ctx, eb, path_tok) orelse return;
             try preprocessInner(ctx, eb, inc_src);
         },
+        // TODO for .define; macro expansion can create virtual sources to
+        // provide super friendly contextual output
     }
 }
 
@@ -173,7 +175,7 @@ fn diagnoseLexer(eb: *ErrorBuffer, lexer: Lexer, e: Lexer.Error) Allocator.Error
         Lexer.Error.UnfinishedString => .unfinished_string,
         Lexer.Error.UnfinishedInclude => .unfinished_include,
     };
-    try eb.add(lexer.loc, kind);
+    try eb.add(lexer.loc(), kind);
 }
 
 fn preprocessInner(ctx: *Context, eb: *ErrorBuffer, src: Source) Allocator.Error!void {
@@ -186,8 +188,8 @@ fn preprocessInner(ctx: *Context, eb: *ErrorBuffer, src: Source) Allocator.Error
         try diagnoseLexer(eb, lexer, e);
         return;
     }) |token| {
-        if (token.loc.line_index != line_index) {
-            line_index = token.loc.line_index;
+        if (token.line_index != line_index) {
+            line_index = token.line_index;
             if (line_buf.items.len > 0) {
                 try preprocessLine(ctx, eb, line_buf.items);
                 line_buf.resize(ctx.ally, 0) catch unreachable;

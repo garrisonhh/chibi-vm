@@ -5,7 +5,7 @@ const Loc = sources.Loc;
 
 pub const Error = struct {
     pub const Kind = union(enum) {
-        unexpected,
+        /// generic error for extra unexpected tokens
         unexpected_expression,
 
         // lex/preprocess errors
@@ -18,13 +18,10 @@ pub const Error = struct {
         included_file_not_found,
         error_directive,
 
-        // parse errors
-        unimplemented_expression,
-        expected_toplevel_statement,
-        expected_identifier,
-        expected_direct_declarator,
-        expected_compound_statement,
-        unfinished_block,
+        // cst parse errors
+        unexpected_right_curly,
+        unmatched_left_curly,
+        expected_end_of_block,
     };
 
     loc: Loc,

@@ -6,7 +6,7 @@ const ErrorBuffer = errors.ErrorBuffer;
 const sources = @import("sources.zig");
 const Source = sources.Source;
 const pp = @import("preprocess.zig");
-const parse = @import("parse.zig");
+const concrete = @import("concrete.zig");
 
 const CliOptions = enum {
     run,
@@ -66,25 +66,20 @@ fn run(ally: Allocator, args: []const Cli.Arg) !void {
         };
         defer ally.free(tokens);
 
-        var toplevels = parse.splitToplevel(tokens);
-        while (toplevels.next()) |toplevel_tokens| {
-            try stdout.print("[lexed]\n", .{});
-            for (toplevel_tokens) |token| {
-                try stdout.print("{} `{s}`\n", .{ token, token.slice() });
-            }
-
-            var tree = try parse.parse(ally, toplevel_tokens);
-            defer tree.deinit();
-
-            try tree.collectErrors(&eb);
-            try stdout.print("[parsed]\n", .{});
-            try tree.display(stdout);
-
-            if (eb.hasErrors()) {
-                try eb.display(stderr);
-                eb.clear();
-            }
+        try stdout.print("[tokens]\n", .{});
+        for (tokens) |token| {
+            try stdout.print("{} `{s}`\n", .{ token, token.slice() });
         }
+
+        if (eb.hasErrors()) {
+            try eb.display(stderr);
+            return;
+        }
+
+        var cst = try concrete.parse(ally, &eb, tokens);
+        defer cst.deinit();
+        try stdout.print("[cst]\n", .{});
+        try cst.display(stdout);
 
         if (eb.hasErrors()) {
             try eb.display(stderr);

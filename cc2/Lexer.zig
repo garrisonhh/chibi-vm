@@ -26,6 +26,10 @@ const c_symbols = [_]Symbol{
     .{ .str = "*", .tag = .star },
     .{ .str = "/", .tag = .slash },
     .{ .str = "%", .tag = .percent },
+    .{ .str = "<", .tag = .lt },
+    .{ .str = ">", .tag = .gt },
+    .{ .str = "<=", .tag = .lte },
+    .{ .str = ">=", .tag = .gte },
 };
 
 const pp_symbols = [_]Symbol{
@@ -112,23 +116,55 @@ pub const Token = struct {
         eq,
         hash,
         hash_hash,
+        gt,
+        lt,
+        gte,
+        lte,
     };
 
     /// starting location
-    loc: Loc,
+    source: Source,
+    line_index: u32,
+    char_index: u32,
     tag: Tag,
-    start: usize,
-    stop: usize,
+    start: u32,
+    stop: u32,
+
+    pub fn loc(self: Self) Loc {
+        return Loc{
+            .source = self.source,
+            .line_index = self.line_index,
+            .char_index = self.char_index,
+            .len = self.stop - self.start,
+        };
+    }
+
+    /// the location of a slice of tokens
+    pub fn rangeLoc(tokens: []const Token) Loc {
+        std.debug.assert(tokens.len > 0);
+        const first = tokens[0];
+        const last = tokens[tokens.len - 1];
+
+        return Loc{
+            .source = first.source,
+            .line_index = first.line_index,
+            .char_index = first.char_index,
+            .len = if (first.source == last.source) last.stop - first.start else 0,
+        };
+    }
 
     pub fn slice(self: Self) []const u8 {
-        return self.loc.source.get().text[self.start..self.stop];
+        return self.source.get().text[self.start..self.stop];
     }
 
     /// location of the end of the token
     pub fn end(self: Self) Loc {
-        var loc = self.loc;
-        loc.char_index += @intCast(self.stop - self.start);
-        return loc;
+        return Loc{
+            .source = self.source,
+            .line_index = self.line_index,
+            .char_index = self.char_index + (self.stop - self.start),
+            .len = 0,
+        };
     }
 
     pub fn format(
@@ -137,7 +173,7 @@ pub const Token = struct {
         _: std.fmt.FormatOptions,
         writer: anytype,
     ) @TypeOf(writer).Error!void {
-        try writer.print("<{} {s}>", .{ self.loc, @tagName(self.tag) });
+        try writer.print("<{} {s}>", .{ self.loc(), @tagName(self.tag) });
     }
 };
 
@@ -153,21 +189,27 @@ const State = union(enum) {
 };
 
 text: []const u8,
-index: usize,
-/// the location of the peeked/next token
-loc: Loc,
+index: u32,
 state: State = .newline,
+source: Source,
+line_index: u32 = 0,
+char_index: u32 = 0,
 
 pub fn init(source: Source) Lexer {
     const text = source.get().text;
     return .{
         .text = text,
         .index = 0,
-        .loc = .{
-            .source = source,
-            .line_index = 0,
-            .char_index = 0,
-        },
+        .source = source,
+    };
+}
+
+pub fn loc(self: Lexer) Loc {
+    return Loc{
+        .source = self.source,
+        .line_index = self.line_index,
+        .char_index = self.char_index,
+        .len = 0,
     };
 }
 
@@ -189,10 +231,10 @@ fn advance(self: *Lexer) void {
     self.index += 1;
 
     if (ch == '\n') {
-        self.loc.line_index += 1;
-        self.loc.char_index = 0;
+        self.line_index += 1;
+        self.char_index = 0;
     } else {
-        self.loc.char_index += 1;
+        self.char_index += 1;
     }
 }
 
@@ -382,7 +424,8 @@ pub fn next(self: *Lexer) Error!?Token {
         self.state = if (pk == '#') .pp else .c;
     }
 
-    const start_loc = self.loc;
+    const start_line_index = self.line_index;
+    const start_char_index = self.char_index;
     const start_index = self.index;
     const tag = switch (self.state) {
         .newline => unreachable,
@@ -391,7 +434,9 @@ pub fn next(self: *Lexer) Error!?Token {
     };
 
     return Token{
-        .loc = start_loc,
+        .source = self.source,
+        .line_index = start_line_index,
+        .char_index = start_char_index,
         .tag = tag,
         .start = start_index,
         .stop = self.index,

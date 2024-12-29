@@ -4,7 +4,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
-pub const Source = enum(u16) {
+pub const Source = enum(u32) {
     _,
 
     pub fn get(src: Source) File {
@@ -19,12 +19,13 @@ pub const File = struct {
 
 const SourceMap = std.AutoArrayHashMapUnmanaged(Source, File);
 
-pub const Loc = packed struct(u64) {
+pub const Loc = struct {
     const Self = @This();
 
     source: Source,
     line_index: u32,
-    char_index: u16,
+    char_index: u32,
+    len: u32,
 
     pub fn lineno(self: Self) usize {
         return self.line_index + 1;
@@ -45,6 +46,10 @@ pub const Loc = packed struct(u64) {
             self.lineno(),
             self.charno(),
         });
+
+        if (self.len > 1) {
+            try writer.print("-{d}", .{self.char_index + self.len});
+        }
     }
 };
 
@@ -132,5 +137,6 @@ pub fn testLoc() Allocator.Error!Loc {
         .source = Ns.test_source.?,
         .line_index = 0,
         .char_index = 0,
+        .len = 0,
     };
 }
