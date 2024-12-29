@@ -19,6 +19,7 @@ pub const File = struct {
 
 const SourceMap = std.AutoArrayHashMapUnmanaged(Source, File);
 
+// TODO just store start and len and compute line and char index as needed
 pub const Loc = struct {
     const Self = @This();
 

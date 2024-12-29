@@ -78,7 +78,7 @@ fn parseDirective(eb: *ErrorBuffer, line: []const Token) Allocator.Error!?Direct
     const directive: Directive = switch (dir_tok.tag) {
         .include => include: {
             const path_tok = iter.next() orelse {
-                try eb.add(dir_tok.end(), .expected_include_path);
+                try eb.add(dir_tok.endLoc(), .expected_include_path);
                 return null;
             };
 
@@ -174,6 +174,7 @@ fn diagnoseLexer(eb: *ErrorBuffer, lexer: Lexer, e: Lexer.Error) Allocator.Error
         Lexer.Error.InvalidInput => .invalid_character,
         Lexer.Error.UnfinishedString => .unfinished_string,
         Lexer.Error.UnfinishedInclude => .unfinished_include,
+        Lexer.Error.UnfinishedComment => .unfinished_comment,
     };
     try eb.add(lexer.loc(), kind);
 }

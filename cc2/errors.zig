@@ -12,6 +12,7 @@ pub const Error = struct {
         invalid_character,
         unfinished_string,
         unfinished_include,
+        unfinished_comment,
         unsupported_preprocessor_directive,
         expected_include_path,
         included_self,

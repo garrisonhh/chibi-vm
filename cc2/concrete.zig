@@ -134,7 +134,7 @@ const TokenIterator = struct {
     fn nextLoc(self: Self) Loc {
         std.debug.assert(self.tokens.len > 0);
         if (self.index == self.tokens.len) {
-            return self.tokens[self.tokens.len - 1].end();
+            return self.tokens[self.tokens.len - 1].endLoc();
         }
         return self.tokens[self.index].loc();
     }
@@ -185,16 +185,19 @@ fn parseNode(cst: *Cst, eb: *ErrorBuffer, tokens: *TokenIterator) Allocator.Erro
         }
     }
 
-    // end of input
+    // check for extra end of input
     const extra = tokens.since(start_index);
     if (extra.len > 0) {
-        try eb.add(Token.rangeLoc(extra), .unexpected_expression);
+        try eb.add(extra[0].startLoc(), .unexpected_expression);
     }
 
     return null;
 }
 
-/// cst must outlive tokens
+/// splits up tokens into a tree structure of statements and blocks, which are
+/// much more bite-sized pieces for the parser.
+///
+/// *tokens must outlive cst*
 pub fn parse(
     ally: Allocator,
     eb: *ErrorBuffer,

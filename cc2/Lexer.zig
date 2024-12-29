@@ -64,6 +64,7 @@ pub const Error = error{
     InvalidInput,
     UnfinishedString,
     UnfinishedInclude,
+    UnfinishedComment,
 };
 
 pub const Token = struct {
@@ -139,6 +140,24 @@ pub const Token = struct {
         };
     }
 
+    pub fn endLoc(self: Self) Loc {
+        return Loc{
+            .source = self.source,
+            .line_index = self.line_index,
+            .char_index = self.char_index + (self.stop - self.start),
+            .len = 0,
+        };
+    }
+
+    pub fn startLoc(self: Self) Loc {
+        return Loc{
+            .source = self.source,
+            .line_index = self.line_index,
+            .char_index = self.char_index,
+            .len = 0,
+        };
+    }
+
     /// the location of a slice of tokens
     pub fn rangeLoc(tokens: []const Token) Loc {
         std.debug.assert(tokens.len > 0);
@@ -155,16 +174,6 @@ pub const Token = struct {
 
     pub fn slice(self: Self) []const u8 {
         return self.source.get().text[self.start..self.stop];
-    }
-
-    /// location of the end of the token
-    pub fn end(self: Self) Loc {
-        return Loc{
-            .source = self.source,
-            .line_index = self.line_index,
-            .char_index = self.char_index + (self.stop - self.start),
-            .len = 0,
-        };
     }
 
     pub fn format(
@@ -383,6 +392,33 @@ fn lexIncludeString(self: *Lexer) Error!?Token.Tag {
     return .include_lit;
 }
 
+fn skipComments(self: *Lexer) Error!bool {
+    const pk = self.peekSlice(2) orelse return false;
+    if (std.mem.eql(u8, "//", pk)) {
+        self.advanceTimes(2);
+        while (self.peek()) |chk| {
+            if (chk == '\n' or chk == '\r') break;
+            self.advance();
+        }
+        return true;
+    } else if (std.mem.eql(u8, pk, "/*")) {
+        self.advanceTimes(2);
+        while (self.peekSlice(2)) |end_pk| {
+            if (std.mem.eql(u8, "*/", end_pk)) {
+                self.advanceTimes(2);
+                break;
+            }
+            self.advance();
+        } else {
+            return Error.UnfinishedComment;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
 fn lexC(self: *Lexer) Error!Token.Tag {
     return self.lexSymbol(&c_symbols) orelse
         self.lexKeyword(&c_keywords) orelse
@@ -400,20 +436,23 @@ fn lexPp(self: *Lexer) Error!Token.Tag {
         Error.InvalidInput;
 }
 
-fn skipNonNewlineSpaces(self: *Lexer) void {
+fn skipSpacesAndComments(self: *Lexer) Error!void {
     while (self.peek()) |pk| {
-        if (!isSpace(pk)) return;
-        self.advance();
+        if (isSpace(pk)) {
+            self.advance();
+        } else if (!try self.skipComments()) {
+            break;
+        }
     }
 }
 
 /// iterate to find the next token
 pub fn next(self: *Lexer) Error!?Token {
-    // skip spaces
-    self.skipNonNewlineSpaces();
+    // skip spaces + comments
+    try self.skipSpacesAndComments();
     while (self.peek() == @as(u8, '\n')) {
         self.state = .newline;
-        self.skipNonNewlineSpaces();
+        try self.skipSpacesAndComments();
     }
 
     // check eof
