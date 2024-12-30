@@ -28,6 +28,31 @@ pub const Loc = struct {
     char_index: u32,
     len: u32,
 
+    /// the span defined by a and b
+    pub fn span(a: Self, b: Self) Loc {
+        _ = a;
+        _ = b;
+        @panic("TODO");
+    }
+
+    pub fn start(self: Self) Loc {
+        return Loc{
+            .source = self.source,
+            .line_index = self.line_index,
+            .char_index = self.char_index,
+            .len = 0,
+        };
+    }
+
+    pub fn end(self: Self) Loc {
+        return Loc{
+            .source = self.source,
+            .line_index = self.line_index,
+            .char_index = self.char_index + self.len,
+            .len = 0,
+        };
+    }
+
     pub fn lineno(self: Self) usize {
         return self.line_index + 1;
     }

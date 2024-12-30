@@ -10,14 +10,15 @@ const errors = @import("errors.zig");
 const ErrorBuffer = errors.ErrorBuffer;
 const Token = @import("Lexer.zig").Token;
 
-const Id = enum(u32) { _ };
+pub const Id = enum(u32) { _ };
 
-const Node = union(enum) {
-    const Block = struct {
-        head: []const Token,
-        block: []const Id,
-    };
+pub const Block = struct {
+    loc: Loc,
+    head: []const Token,
+    block: []const Id,
+};
 
+pub const Node = union(enum) {
     root: []const Id,
     stmt: []const Token,
     block: Block,
@@ -28,14 +29,22 @@ pub const Cst = struct {
     const Self = @This();
 
     arena: std.heap.ArenaAllocator,
+    source: sources.Source,
     nodes: std.MultiArrayList(Node) = .{},
     root: ?Id = null,
 
-    fn init(allocator: Allocator) Self {
-        return Cst{ .arena = std.heap.ArenaAllocator.init(allocator) };
+    fn init(
+        allocator: Allocator,
+        source: sources.Source,
+    ) Self {
+        return Cst{
+            .arena = std.heap.ArenaAllocator.init(allocator),
+            .source = source,
+        };
     }
 
     pub fn deinit(self: *Self) void {
+        self.nodes.deinit(self.arena.child_allocator);
         self.arena.deinit();
     }
 
@@ -45,12 +54,25 @@ pub const Cst = struct {
 
     fn add(self: *Self, node: Node) Allocator.Error!Id {
         const id: Id = @enumFromInt(self.nodes.len);
-        try self.nodes.append(self.ally(), node);
+        try self.nodes.append(self.arena.child_allocator, node);
         return id;
     }
 
     pub fn get(self: *const Self, id: Id) Node {
         return self.nodes.get(@intFromEnum(id));
+    }
+
+    pub fn getLoc(self: *const Self, id: Id) Loc {
+        return switch (self.get(id)) {
+            .root => Loc{
+                .source = self.source,
+                .line_index = 0,
+                .char_index = 0,
+                .len = 0,
+            },
+            .stmt => |stmt| Token.rangeLoc(stmt),
+            .block => |block| block.loc,
+        };
     }
 
     fn displayInner(
@@ -59,10 +81,11 @@ pub const Cst = struct {
         depth: usize,
         writer: anytype,
     ) @TypeOf(writer).Error!void {
-        try writer.writeByteNTimes(' ', 4 * depth);
+        try writer.writeByteNTimes(' ', 2 * depth);
 
         const node = self.get(id);
-        try writer.print("{s}", .{@tagName(node)});
+        const loc = self.getLoc(id);
+        try writer.print("{s} {}", .{ @tagName(node), loc });
 
         switch (node) {
             .root => |children| {
@@ -72,16 +95,12 @@ pub const Cst = struct {
                 }
             },
             .stmt => |tokens| {
-                const loc = Token.rangeLoc(tokens);
-                try writer.print(" {}", .{loc});
                 for (tokens) |tok| {
                     try writer.print(" {s}", .{tok.slice()});
                 }
                 try writer.print("\n", .{});
             },
             .block => |block| {
-                const loc = Token.rangeLoc(block.head);
-                try writer.print(" {}:", .{loc});
                 for (block.head) |tok| {
                     try writer.print(" {s}", .{tok.slice()});
                 }
@@ -177,6 +196,7 @@ fn parseNode(cst: *Cst, eb: *ErrorBuffer, tokens: *TokenIterator) Allocator.Erro
                 }
 
                 return try cst.add(.{ .block = .{
+                    .loc = Token.rangeLoc(tokens.since(start_index)),
                     .head = head,
                     .block = try block.toOwnedSlice(),
                 } });
@@ -201,9 +221,10 @@ fn parseNode(cst: *Cst, eb: *ErrorBuffer, tokens: *TokenIterator) Allocator.Erro
 pub fn parse(
     ally: Allocator,
     eb: *ErrorBuffer,
+    source: sources.Source,
     tokens: []const Token,
 ) Allocator.Error!Cst {
-    var cst = Cst.init(ally);
+    var cst = Cst.init(ally, source);
     errdefer cst.deinit();
 
     var iter = TokenIterator{ .tokens = tokens };

@@ -23,6 +23,13 @@ pub const Error = struct {
         unexpected_right_curly,
         unmatched_left_curly,
         expected_end_of_block,
+
+        // ast parse errors
+        expected_declarator,
+        expected_rparen,
+        expected_declaration,
+        expected_statement,
+        expected_semicolon,
     };
 
     loc: Loc,

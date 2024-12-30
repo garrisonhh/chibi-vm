@@ -7,6 +7,7 @@ const sources = @import("sources.zig");
 const Source = sources.Source;
 const pp = @import("preprocess.zig");
 const concrete = @import("concrete.zig");
+const abstract = @import("abstract.zig");
 
 const CliOptions = enum {
     run,
@@ -70,16 +71,24 @@ fn run(ally: Allocator, args: []const Cli.Arg) !void {
         for (tokens) |token| {
             try stdout.print("{} `{s}`\n", .{ token, token.slice() });
         }
+        try stdout.print("\n", .{});
 
         if (eb.hasErrors()) {
             try eb.display(stderr);
             return;
         }
 
-        var cst = try concrete.parse(ally, &eb, tokens);
+        var cst = try concrete.parse(ally, &eb, src, tokens);
         defer cst.deinit();
         try stdout.print("[cst]\n", .{});
         try cst.display(stdout);
+        try stdout.print("\n", .{});
+
+        var ast = try abstract.parse(ally, &eb, cst);
+        defer ast.deinit();
+        try stdout.print("[ast]\n", .{});
+        try ast.display(stdout);
+        try stdout.print("\n", .{});
 
         if (eb.hasErrors()) {
             try eb.display(stderr);
