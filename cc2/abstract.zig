@@ -38,6 +38,18 @@ fn CstIterator(comptime T: type) type {
             return item;
         }
 
+        /// finds a reasonable location for the end of the consumed tokens
+        fn lastLoc(self: TokenIterator) Loc {
+            if (self.items.len == 0) {
+                return self.loc.end();
+            } else if (self.index < self.items.len) {
+                return self.items[self.index - 1].endLoc();
+            }
+
+            return self.items[self.items.len - 1].endLoc();
+        }
+
+        /// finds a reasonable location for the next token pointed to by the iterator
         fn nextLoc(self: TokenIterator) Loc {
             if (self.items.len == 0) {
                 return self.loc.start();
@@ -65,6 +77,13 @@ pub const Id = enum(u32) { _ };
 pub const Expr = union(enum) {
     const Self = @This();
     pub const Tag = std.meta.Tag(Self);
+
+    const Symbol = enum {
+        comma,
+        assignment,
+        add,
+        subtract,
+    };
 
     const StorageClassSpec = enum {
         typedef,
@@ -111,6 +130,17 @@ pub const Expr = union(enum) {
         compound_stmt: []const Id,
     };
 
+    const Declaration = struct {
+        decl_specs: []const Id,
+        init_declarators: Id,
+    };
+
+    const Binary = struct {
+        symbol: Id,
+        lhs: Id,
+        rhs: Id,
+    };
+
     translation_unit: []const Id,
     function_definition: FunctionDefinition,
     storage_class_spec: StorageClassSpec,
@@ -120,6 +150,17 @@ pub const Expr = union(enum) {
     statement: Id,
     return_stmt: ?Id,
     integer_constant: []const u8,
+    string_constant: []const u8,
+    parens: Id,
+    symbol: Symbol,
+    binary: Binary,
+    empty_decl,
+    declaration: Declaration,
+
+    /// type of the field associated with this tag
+    fn Data(comptime tag: Tag) type {
+        return std.meta.FieldType(Self, tag);
+    }
 };
 
 pub const Ast = struct {
@@ -299,13 +340,6 @@ fn parseEnumToExpr(comptime E: type, comptime into: Expr.Tag) ParseFunction {
 }
 
 fn parseOneOf(comptime funcs: anytype) ParseFunction {
-    comptime {
-        const info = @typeInfo(@TypeOf(funcs));
-        if (info != .Array or info.Array.child != ParseFunction) {
-            @compileError("expected array of parse functions, found: " ++ @typeName(@TypeOf(funcs)));
-        }
-    }
-
     return struct {
         fn f(eb: *ErrorBuffer, ast: *Ast, tokens: *TokenIterator) Error!?Id {
             return inline for (funcs) |func| {
@@ -317,11 +351,120 @@ fn parseOneOf(comptime funcs: anytype) ParseFunction {
     }.f;
 }
 
+fn SeriesSpec(comptime tag: Expr.Tag) type {
+    comptime {
+        const info = @typeInfo(Expr.Data(tag));
+        if (info != .Struct) {
+            @compileError("parseSeries expects to parse into a struct");
+        }
+        for (info.Struct.fields) |field| {
+            if (field.type != Id) {
+                @compileError(
+                    "parseSeries expects fields of " ++ @typeName(Expr.Data(tag)) ++
+                        " to be Ids",
+                );
+            }
+        }
+    }
+
+    return struct {
+        parser: ParseFunction,
+        to_field: ?std.meta.FieldEnum(Expr.Data(tag)),
+        on_fail: ?errors.Error.Kind,
+    };
+}
+
+fn parseSeries(
+    comptime tag: Expr.Tag,
+    comptime specs: []const SeriesSpec(tag),
+) ParseFunction {
+    comptime {
+        if (specs.len == 0) {
+            @compileError("must have at least one parser");
+        }
+    }
+
+    return struct {
+        fn f(eb: *ErrorBuffer, ast: *Ast, tokens: *TokenIterator) Error!?Id {
+            const first_loc = tokens.nextLoc();
+
+            var result: Expr.Data(tag) = undefined;
+            inline for (specs) |spec| {
+                const data = try spec.parser(eb, ast, tokens) orelse {
+                    if (spec.on_fail) |err| {
+                        try eb.add(tokens.nextLoc(), err);
+                    }
+                    return null;
+                };
+                if (spec.to_field) |field| {
+                    @field(result, @tagName(field)) = data;
+                }
+            }
+
+            const loc = first_loc.span(tokens.lastLoc());
+            const expr = @unionInit(Expr, @tagName(tag), result);
+            return try ast.add(loc, expr);
+        }
+    }.f;
+}
+
 fn parseTag(tokens: *TokenIterator, tag: Token.Tag) ?Token {
     const tok = tokens.peek() orelse return null;
     if (tok.tag != tag) return null;
     tokens.advance();
     return tok;
+}
+
+fn parseSymbol(comptime tag: Token.Tag, comptime symbol: Expr.Symbol) ParseFunction {
+    return struct {
+        fn f(_: *ErrorBuffer, ast: *Ast, tokens: *TokenIterator) Error!?Id {
+            const token = parseTag(tokens, tag) orelse return null;
+            return try ast.add(token.loc(), .{ .symbol = symbol });
+        }
+    }.f;
+}
+
+const SymbolSpec = struct { Token.Tag, Expr.Symbol };
+
+fn parseOneOfSymbols(comptime specs: []const SymbolSpec) ParseFunction {
+    return struct {
+        fn f(_: *ErrorBuffer, ast: *Ast, tokens: *TokenIterator) Error!?Id {
+            const tok = tokens.peek() orelse return null;
+            const symbol = for (specs) |spec| {
+                const tag, const symbol = spec;
+                if (tok.tag == tag) break symbol;
+            } else {
+                return null;
+            };
+            tokens.advance();
+            return try ast.add(tok.loc(), .{ .symbol = symbol });
+        }
+    }.f;
+}
+
+fn parseBinaryRightAssociative(
+    comptime symbols: []const SymbolSpec,
+    comptime inner_parser: ParseFunction,
+) ParseFunction {
+    return struct {
+        fn f(eb: *ErrorBuffer, ast: *Ast, tokens: *TokenIterator) Error!?Id {
+            const lhs = try inner_parser(eb, ast, tokens) orelse return null;
+            const symbol = try parseOneOfSymbols(symbols)(eb, ast, tokens) orelse {
+                return lhs;
+            };
+            const rhs = try f(eb, ast, tokens) orelse {
+                try eb.add(ast.getLoc(lhs).span(tokens.nextLoc()), .expected_expression);
+                return null;
+            };
+
+            const loc = ast.getLoc(lhs).span(ast.getLoc(rhs));
+            return try ast.add(loc, .{ .binary = .{
+                .symbol = symbol,
+                .lhs = lhs,
+                .rhs = rhs,
+            } });
+        }
+    }.f;
 }
 
 fn parseIdentifier(_: *ErrorBuffer, ast: *Ast, tokens: *TokenIterator) Error!?Id {
@@ -333,7 +476,7 @@ fn parseIdentifier(_: *ErrorBuffer, ast: *Ast, tokens: *TokenIterator) Error!?Id
 /// expect a semicolon and tokens to finish
 fn expectEndOfStatement(eb: *ErrorBuffer, tokens: *TokenIterator) Error!void {
     if (parseTag(tokens, .semicolon) == null) {
-        try eb.add(tokens.nextLoc(), .expected_semicolon);
+        try eb.add(tokens.nextLoc(), .{ .expected_token = .semicolon });
         return;
     }
 
@@ -378,7 +521,7 @@ fn parseDirectDeclarator(eb: *ErrorBuffer, ast: *Ast, tokens: *TokenIterator) !?
                 return null;
             };
             if (parseTag(tokens, .rparen) == null) {
-                try eb.add(ast.getLoc(inner).end(), .expected_rparen);
+                try eb.add(ast.getLoc(inner).end(), .{ .expected_token = .rparen });
             }
 
             break :initial inner;
@@ -430,25 +573,91 @@ fn parseDeclarator(eb: *ErrorBuffer, ast: *Ast, tokens: *TokenIterator) Error!?I
     return declarator;
 }
 
-fn parseDeclaration(eb: *ErrorBuffer, ast: *Ast, tokens: *TokenIterator) Error!?Id {
-    _ = eb;
-    _ = ast;
-    _ = tokens;
-    // TODO
-    return null;
+fn parseInitDeclarator(eb: *ErrorBuffer, ast: *Ast, tokens: *TokenIterator) Error!?Id {
+    const declarator = try parseDeclarator(eb, ast, tokens) orelse return null;
+    if (parseTag(tokens, .equals)) |tok| {
+        _ = tok;
+        @panic("TODO declarator initializers");
+    }
+
+    return declarator;
 }
 
-fn parseExpression(eb: *ErrorBuffer, ast: *Ast, tokens: *TokenIterator) Error!?Id {
-    _ = eb;
-    // TODO do this for real
+fn parseDeclaration(eb: *ErrorBuffer, ast: *Ast, tokens: *TokenIterator) Error!?Id {
     const first = tokens.peek() orelse return null;
-    if (first.tag == .int_lit) {
+    if (first.tag == .semicolon) {
         tokens.advance();
-        const str = try ast.ally().dupe(u8, first.slice());
-        return try ast.add(first.loc(), .{ .integer_constant = str });
+        return try ast.add(first.loc(), .empty_decl);
     }
-    return null;
+
+    const decl_specs = try parseDeclSpecs(eb, ast, tokens);
+
+    const init_declarators = try parseBinaryRightAssociative(
+        &.{.{ .comma, .comma }},
+        parseInitDeclarator,
+    )(eb, ast, tokens) orelse {
+        try eb.add(tokens.nextLoc(), .expected_declarator);
+        return null;
+    };
+
+    const loc = first.loc().span(ast.getLoc(init_declarators));
+    return try ast.add(loc, .{ .declaration = .{
+        .decl_specs = decl_specs,
+        .init_declarators = init_declarators,
+    } });
 }
+
+fn parsePrimaryExpression(eb: *ErrorBuffer, ast: *Ast, tokens: *TokenIterator) Error!?Id {
+    const tok = tokens.peek() orelse return null;
+    return switch (tok.tag) {
+        .ident => ident: {
+            tokens.advance();
+            const str = try ast.ally().dupe(u8, tok.slice());
+            break :ident try ast.add(tok.loc(), .{ .identifier = str });
+        },
+        .int_lit => int: {
+            tokens.advance();
+            const str = try ast.ally().dupe(u8, tok.slice());
+            break :int try ast.add(tok.loc(), .{ .integer_constant = str });
+        },
+        .string_lit => str: {
+            tokens.advance();
+            const str = try ast.ally().dupe(u8, tok.slice());
+            break :str try ast.add(tok.loc(), .{ .string_constant = str });
+        },
+        .lparen => parens: {
+            tokens.advance();
+            const inner = try parseExpression(eb, ast, tokens) orelse {
+                try eb.add(tokens.nextLoc(), .expected_expression);
+                return null;
+            };
+            const rparen = parseTag(tokens, .rparen) orelse {
+                try eb.add(tokens.nextLoc(), .{ .expected_token = .rparen });
+
+                const combined_loc = tok.loc().span(tokens.nextLoc());
+                break :parens try ast.add(combined_loc, .{ .parens = inner });
+            };
+
+            const combined_loc = tok.loc().span(rparen.loc());
+            break :parens try ast.add(combined_loc, .{ .parens = inner });
+        },
+        else => null,
+    };
+}
+
+const parseAddSubExpr = parseBinaryRightAssociative(
+    &.{ .{ .plus, .add }, .{ .minus, .subtract } },
+    parsePrimaryExpression,
+);
+
+const parseAssignmentExpr = parseBinaryRightAssociative(
+    &.{.{ .equals, .assignment }},
+    parseAddSubExpr,
+);
+
+const parseCommaExpr = parseBinaryRightAssociative(&.{.{ .comma, .comma }}, parseAssignmentExpr);
+
+const parseExpression = parseCommaExpr;
 
 fn parseStatement(eb: *ErrorBuffer, cst: Cst, ast: *Ast, cid: Cid) Error!?Id {
     const node = cst.get(cid);
@@ -464,10 +673,16 @@ fn parseStatement(eb: *ErrorBuffer, cst: Cst, ast: *Ast, cid: Cid) Error!?Id {
                     tokens.advance();
                     const value = try parseExpression(eb, ast, &tokens);
                     try expectEndOfStatement(eb, &tokens);
-
                     return try ast.add(loc, .{ .return_stmt = value });
                 },
-                else => @panic("TODO"),
+                else => {
+                    const value = try parseOneOf(.{
+                        parseExpression,
+                        parseDeclaration,
+                    })(eb, ast, &tokens);
+                    try expectEndOfStatement(eb, &tokens);
+                    return value;
+                },
             }
         },
         .block => |block| {

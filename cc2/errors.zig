@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sources = @import("sources.zig");
 const Loc = sources.Loc;
+const Lexer = @import("Lexer.zig");
 
 pub const Error = struct {
     pub const Kind = union(enum) {
@@ -26,10 +27,10 @@ pub const Error = struct {
 
         // ast parse errors
         expected_declarator,
-        expected_rparen,
         expected_declaration,
         expected_statement,
-        expected_semicolon,
+        expected_token: Lexer.Token.Tag,
+        expected_expression,
     };
 
     loc: Loc,
@@ -44,6 +45,9 @@ pub const Error = struct {
 
     fn displayMessage(kind: Kind, writer: anytype) @TypeOf(writer).Error!void {
         switch (kind) {
+            .expected_token => |tok_tag| {
+                try writer.print("expected `{s}`", .{tok_tag.printable()});
+            },
             inline else => |meta, tag| {
                 if (@TypeOf(meta) != void) {
                     @compileError(@tagName(tag) ++ " needs an error message");
@@ -76,7 +80,12 @@ pub const Error = struct {
         const line = lines.next().?; // if this fails, line index is invalid
 
         try writer.print("{s}\n", .{line});
-        try writer.writeByteNTimes(' ', loc.char_index);
+        for (0..loc.char_index) |i| {
+            switch (line[i]) {
+                '\t' => try writer.writeByte('\t'),
+                else => try writer.writeByte(' '),
+            }
+        }
         try writer.print("^\n", .{});
     }
 

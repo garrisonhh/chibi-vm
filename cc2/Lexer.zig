@@ -121,6 +121,16 @@ pub const Token = struct {
         lt,
         gte,
         lte,
+
+        pub fn printable(tag: Tag) []const u8 {
+            for (c_symbols ++ pp_symbols) |symbol| {
+                if (tag == symbol.tag) {
+                    return symbol.str;
+                }
+            }
+
+            return @tagName(tag);
+        }
     };
 
     /// starting location

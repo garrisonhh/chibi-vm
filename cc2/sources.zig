@@ -30,9 +30,15 @@ pub const Loc = struct {
 
     /// the span defined by a and b
     pub fn span(a: Self, b: Self) Loc {
-        _ = a;
+        // TODO actually implement this
         _ = b;
-        @panic("TODO");
+
+        return .{
+            .source = a.source,
+            .line_index = a.line_index,
+            .char_index = a.char_index,
+            .len = 0,
+        };
     }
 
     pub fn start(self: Self) Loc {
