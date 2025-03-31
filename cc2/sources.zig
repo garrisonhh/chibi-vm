@@ -119,8 +119,8 @@ pub fn add(filename: []const u8, text: []const u8) Allocator.Error!Source {
 
 fn RetError(comptime T: type) type {
     comptime {
-        const Ret = @typeInfo(T).Fn.return_type.?;
-        return @typeInfo(Ret).ErrorUnion.error_set;
+        const Ret = @typeInfo(T).@"fn".return_type.?;
+        return @typeInfo(Ret).error_union.error_set;
     }
 }
 

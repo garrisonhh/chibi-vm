@@ -259,7 +259,7 @@ fn advance(self: *Lexer) void {
 
 fn advanceTimes(self: *Lexer, times: usize) void {
     // TODO this could be more efficient lol
-    for (times) |_| self.advance();
+    for (0..times) |_| self.advance();
 }
 
 // classification ==============================================================

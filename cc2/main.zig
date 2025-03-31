@@ -6,8 +6,8 @@ const ErrorBuffer = errors.ErrorBuffer;
 const sources = @import("sources.zig");
 const Source = sources.Source;
 const pp = @import("preprocess.zig");
-const concrete = @import("concrete.zig");
-const abstract = @import("abstract.zig");
+const concrete = @import("concrete_ir.zig");
+const abstract = @import("abstract_ir.zig");
 
 const CliOptions = enum {
     run,

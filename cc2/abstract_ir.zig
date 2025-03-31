@@ -5,7 +5,7 @@ const Loc = sources.Loc;
 const errors = @import("errors.zig");
 const ErrorBuffer = errors.ErrorBuffer;
 const Token = @import("Lexer.zig").Token;
-const concrete = @import("concrete.zig");
+const concrete = @import("concrete_ir.zig");
 const Cst = concrete.Cst;
 const Cid = concrete.Id;
 
@@ -215,13 +215,13 @@ pub const Ast = struct {
         writer: anytype,
     ) @TypeOf(writer).Error!void {
         switch (@typeInfo(T)) {
-            .Void => {},
-            .Optional => {
+            .void => {},
+            .optional => {
                 const wrapped = data orelse return;
                 try self.displayData(@TypeOf(wrapped), wrapped, child_depth, writer);
             },
-            .Pointer => |ptr| {
-                std.debug.assert(ptr.size == .Slice);
+            .pointer => |ptr| {
+                std.debug.assert(ptr.size == .slice);
 
                 switch (ptr.child) {
                     Id => {
@@ -236,7 +236,7 @@ pub const Ast = struct {
                     else => @compileError(@typeName(ptr.child)),
                 }
             },
-            .Enum => {
+            .@"enum" => {
                 if (T == Id) {
                     try self.displayInner(data, child_depth, writer);
                 } else {
@@ -244,7 +244,7 @@ pub const Ast = struct {
                     try writer.print("{s}\n", .{@tagName(data)});
                 }
             },
-            .Struct => |st| {
+            .@"struct" => |st| {
                 inline for (st.fields) |field| {
                     try writer.writeByteNTimes(' ', 2 * child_depth);
                     try writer.print("({s})\n", .{field.name});
@@ -256,7 +256,7 @@ pub const Ast = struct {
                     );
                 }
             },
-            .Union => {
+            .@"union" => {
                 switch (data) {
                     inline else => |child_data, child_tag| {
                         try writer.writeByteNTimes(' ', 2 * child_depth);
@@ -591,6 +591,10 @@ fn parseDeclaration(eb: *ErrorBuffer, ast: *Ast, tokens: *TokenIterator) Error!?
     }
 
     const decl_specs = try parseDeclSpecs(eb, ast, tokens);
+    if (decl_specs.len == 0) {
+        try eb.add(tokens.nextLoc(), .expected_declaration);
+        return null;
+    }
 
     const init_declarators = try parseBinaryRightAssociative(
         &.{.{ .comma, .comma }},
