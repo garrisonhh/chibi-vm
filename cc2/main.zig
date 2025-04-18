@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const argz = @import("argz.zig");
@@ -8,6 +9,13 @@ const Source = sources.Source;
 const pp = @import("preprocess.zig");
 const concrete = @import("concrete_ir.zig");
 const abstract = @import("abstract_ir.zig");
+const typed = @import("typed_ir.zig");
+
+comptime {
+    if (builtin.is_test) {
+        _ = typed;
+    }
+}
 
 const CliOptions = enum {
     run,

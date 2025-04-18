@@ -95,17 +95,27 @@ pub fn build(b: *std.Build) void {
     const run_cc2_step = b.step("run-cc2", "Run cc2");
     run_cc2_step.dependOn(&run_cc2_cmd.step);
 
+    // cc2 tests
+    const cc2_tests = b.addTest(.{
+        .root_source_file = b.path("cc2/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const run_cc2_tests = b.addRunArtifact(cc2_tests);
+    const cc2_test_step = b.step("test-cc2", "Run cc2 tests");
+    cc2_test_step.dependOn(&run_cc2_tests.step);
+
     // vm tests
-    const unit_tests = b.addTest(.{
+    const vm_tests = b.addTest(.{
         .root_source_file = b.path("vm/tests/tests.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    unit_tests.root_module.addImport("vm", vm);
+    vm_tests.root_module.addImport("vm", vm);
 
-    const run_unit_tests = b.addRunArtifact(unit_tests);
-
-    const test_step = b.step("test", "Run vm tests");
-    test_step.dependOn(&run_unit_tests.step);
+    const run_vm_tests = b.addRunArtifact(vm_tests);
+    const vm_test_step = b.step("test-vm", "Run vm tests");
+    vm_test_step.dependOn(&run_vm_tests.step);
 }

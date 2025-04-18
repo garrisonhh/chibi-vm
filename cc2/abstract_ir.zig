@@ -304,7 +304,7 @@ pub const Ast = struct {
     }
 };
 
-const Error = Allocator.Error;
+pub const Error = Allocator.Error;
 const ParseFunction = fn (*ErrorBuffer, *Ast, *TokenIterator) Error!?Id;
 
 fn ParseEnumResult(comptime E: type) type {
@@ -737,7 +737,7 @@ fn expectCompoundStatement(
     return try statements.toOwnedSlice();
 }
 
-fn expectExternalDeclaration(eb: *ErrorBuffer, cst: Cst, ast: *Ast, cid: Cid) !?Id {
+fn expectExternalDeclaration(eb: *ErrorBuffer, cst: Cst, ast: *Ast, cid: Cid) Error!?Id {
     const loc = cst.getLoc(cid);
     switch (cst.get(cid)) {
         .root => unreachable,
@@ -782,7 +782,7 @@ fn expectExternalDeclaration(eb: *ErrorBuffer, cst: Cst, ast: *Ast, cid: Cid) !?
     }
 }
 
-fn expectTranslationUnit(eb: *ErrorBuffer, cst: Cst, ast: *Ast) !Id {
+fn expectTranslationUnit(eb: *ErrorBuffer, cst: Cst, ast: *Ast) Error!Id {
     var ext_decls = std.ArrayList(Id).init(ast.ally());
     defer ext_decls.deinit();
 
@@ -800,7 +800,7 @@ fn expectTranslationUnit(eb: *ErrorBuffer, cst: Cst, ast: *Ast) !Id {
 }
 
 /// parses a translation unit
-pub fn parse(ally: Allocator, eb: *ErrorBuffer, cst: Cst) !Ast {
+pub fn parse(ally: Allocator, eb: *ErrorBuffer, cst: Cst) Error!Ast {
     var ast = Ast.init(ally);
     errdefer ast.deinit();
 
